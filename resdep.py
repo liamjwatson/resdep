@@ -1,4 +1,5 @@
-from typing import Any
+from shutil import ExecError
+from typing import Union, Any
 import epics
 import time
 import datetime
@@ -9,24 +10,19 @@ import warnings
 import sys
 import matplotlib.pyplot as plt
 import numpy as np
-import traceback
-from epicsBLMs import epicsBLMs
+
+# from alignBLMtoFillPattern import alignFillPattern
+from epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions  
+from epicsScrapers import Scraper
 
 # --- Constants
 # * Fractional spin tune
 v_s 		: float = 0.833 				# 6.833
 v_s303GeV 	: float = 0.876 				# 6.876, based on if the beam energy is 3.03 GeV 
-# * Fractional Betatron Tunes
-#
-# from BbB
-# peaktune_x = epics.pv.get_pv("IGPF:X:SRAM:PEAKTUNE2")
-# peatune_y = epics.pv.get_pv("IGPF:Y:SRAM:PEAKTUNE2")
-# v_x = peaktune_x.get()
-# v_y = peaktune_y.get()
-# 
 # End User Run Machine Parameters (2025-09-28)
 v_x 	: float = 0.289148 				# 13.29
 v_y 	: float = 0.21626 				# 5.219
+#
 f_rev 	: float = 1.38799e3 			# kHz
 g 		: float = 2.0023193043609236
 a_g 	: float = (g - 2)/2
@@ -38,20 +34,43 @@ e 		: float = 1.602176634e-19		# C
 direction 			: str 	= 'Y'		# 'X' or 'Y'
 tune 				: float = v_s303GeV # v_s, v_x, or v_y (... or v_s303GeV)
 harmonic 			: int 	= 0			# int >= 0
-bounds 				: float = 0.3/100	# input %, output decimal
-set_kicker_amp 		: float = 1 		# % (0-1)
-set_drive_pattern 	: str 	= '!'		# 'start:stop' or '!' for all
+bounds 				: float = 0.05/100	# input %, output decimal
+set_kicker_amp 		: float = 0 		# % (0-1)
+set_drive_pattern 	: str 	= '!'		# 'start:stop' or '!' for all. Start at '1' not '0'
 set_sweep_span 		: float = 0			# kHz
 set_sweep_period 	: float = 0 		# us
 sweep_rate 			: float = 10		# Hz/s
 sweep_step_size 	: float = 0.5 		# Hz - minimum allowable = 0.5
 # --- Scrapers
-set_scraper_upper	: float  = 22.00 	# mm
-# --- LiberaBLM params
-# set_adc_offset_1: int | None = None 		# int: 0->16
-# set_adc_window_1: int | None = None 		# int: 0->16
-# set_adc_offset_2: int | None = None 		# int: 0->16
-# set_adc_window_2: int | None = None 		# int: 0->16
+set_scraper_upper	: float  = 21.50 	# mm, Default = 20.35, set = 22.00
+set_scraper_lower	: float  = 14.20 	# mm, Default = 14.20, set = ???
+set_scraper_inner	: float  = 33.50 	# mm, Default = 24.01, set = 34.50
+
+# --- ADC counter masks
+# TODO: Update the documentation on Confluence
+
+response = input("Run BLM fill pattern alignment? (y/n)?").strip().lower()
+if response == "y":
+	
+	# calculated_adc_counter_windows, depolarised_bunches = alignFillPattern()
+	
+	# (set_adc_counter_offset_1, 
+  	#  set_adc_counter_window_1, 
+  	#  set_adc_counter_offset_2, 
+  	#  set_adc_counter_window_2) = calculated_adc_counter_windows
+	
+	# set_drive_pattern = depolarised_bunches
+
+	raise ExecError("Fill pattern alignment is not callable (yet, sorry).\nRun alignBLMtoFillPattern.py in a separate window and config resdep based on the output.")
+
+	pass
+
+else:
+	set_adc_counter_offset_1: int = 0
+	set_adc_counter_window_1: int = 8
+	set_adc_counter_offset_2: int = 8
+	set_adc_counter_window_2: int = 8
+
 
 # --- input handling
 if direction not in ['X', 'Y', 'Z']:
@@ -63,7 +82,11 @@ if not isinstance(harmonic, int) or harmonic < 0:
 if not 0 <= set_kicker_amp <= 1:
 	raise ValueError('set_kicker_amp must be between 0 and 1.')
 if not isinstance(set_drive_pattern, str):
-	raise TypeError("set_drive_pattern must be a string of format 'start:stop' or '!' meaning all bunches.\nSee Section 5.3 of the iGp12 manual: https://confluence.synchrotron.org.au/confluence/display/AP/BBB+Feedback?preview=/405733507/405733502/iGp12.pdf#BBBFeedback-TechnicalManual.1")
+	raise TypeError(
+		"set_drive_pattern must be a string of format 'start:stop' or '!' meaning all bunches.\n"
+		+ "See Section 5.3 of the iGp12 manual:" 
+		+ "https://confluence.synchrotron.org.au/confluence/display/AP/BBB+Feedback?preview=/405733507/405733502/iGp12.pdf#BBBFeedback-TechnicalManual.1"
+	)
 if set_sweep_span < 0:
 	raise ValueError('set_sweep_span must be greater than or equal to 0 Hz.')
 if sweep_rate <= 0:
@@ -76,14 +99,14 @@ if sweep_rate > 10:
 if sweep_step_size < 0.5:
 	raise ValueError("sweep_step_size must be larger than 0.5 Hz.")
 
-response = input("Do you want to calculate f_rev from master RF? (y/n): ")
-if response == 'y':
-	masterRF 	= epics.pv.get_pv('SR00MOS01:FREQUENCY_MONITOR')
-	masterRFact = masterRF.get()			# Hz
-	if masterRFact is not None:
-		f_rev 	= 1e-3 * masterRFact/360 	# kHz
-	else:
-		raise ValueError("masterRF.get() returned 'None'. Exiting...")
+# Grab masterRF from EPICS
+# if disconnected, .get() will return none and f_rev with throw exception
+masterRF = epics.pv.get_pv('SR00MOS01:FREQUENCY_MONITOR', connect=True)
+masterRFact: Union[float, None] = masterRF.get(timeout=5)			# Hz
+try:
+	f_rev: float = 1e-3 * masterRFact/360 	# kHz # pyright: ignore[reportOperatorIssue] 
+except TypeError: # ^ masterRFact might be None
+	print("Could not grab master RF from EPICS (weird?). Using default f_rev")
 
 # --- calcs
 intrinsic_res_freq 	: float = f_rev * (tune + 0)							# 0th order, kHz
@@ -108,95 +131,87 @@ if not response == 'y':
 	sys.exit()
 
 # --------------------------------------------------------------------------------------------------------------------
-#
 # --- assign PVs : BLMs 
-blmPVs : dict[str, Any] = {}
-# loop over all sectors
-for i in range(1,14+1,1):
-	# Collect both straight ('A') and arc ('B') BLMs
-	for letter in ['A', 'B']:
-		blmPVs[str(i)+letter] = epics.pv.get_pv(f'SR{i:02d}BLM01:SIGNALS_SA_{letter}_MONITOR')
-
-# --- assign PVs : BLM settings
-# ! currently not implemented (esp in main())
-# blm = epicsBLMs()
-# blm.get_loss_PVs()
-# blm.get_settings_PVs()
-# blm.get_init_settings()
-
-# ! currently not implemented (esp in main())
-# init Libera+ module
-# libera = LiberaBLM()
-# libera.connect()
-# libera.get_init_adc_windows()
+blm = BLMs()
+blm.get_loss_PVs()
+blm.get_adc_counter_mask_PVs()
+time.sleep(2) # give all the PVs a sec to catch up
+blm.get_init_adc_counter_masks()
+time.sleep(2) # give all the PVs a sec to catch up
+blm.get_decimation()
+time.sleep(2) # give all the PVs a sec to catch up
+# blm.inits_to_json(mode='adc_counter_masks')
 
 # --- assign PVs : drive
-sweep_freq_act 	= epics.pv.get_pv('IGPF:'+direction+':DRIVE:FREQ_ACT')
-sweep_freq 		= epics.pv.get_pv('IGPF:'+direction+':DRIVE:FREQ')
-sweep_span 		= epics.pv.get_pv('IGPF:'+direction+':DRIVE:SPAN')
-sweep_period 	= epics.pv.get_pv('IGPF:'+direction+':DRIVE:PERIOD')
-kicker_amp 		= epics.pv.get_pv('IGPF:'+direction+':DRIVE:AMPL')
-pattern 		= epics.pv.get_pv('IGPF:'+direction+':DRIVE:PATTERN')
+sweep_freq_act 	= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:FREQ_ACT', connect=True)
+sweep_freq 		= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:FREQ', connect=True)
+sweep_span 		= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:SPAN', connect=True)
+sweep_period 	= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:PERIOD', connect=True)
+kicker_amp 		= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:AMPL', connect=True)
+pattern 		= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:PATTERN', connect=True)
 
 # --- assign PVs: current
-dcct		= epics.pv.get_pv('SR11BCM01:CURRENT_MONITOR')
+dcct = epics.pv.get_pv('SR11BCM01:CURRENT_MONITOR', connect=True)
 
 # --- assign PVs: scrapers (up, down, left, right)
-scrapers: dict[tuple[str, ...], Any] = {}
-for scraper in ['UPPER', 'LOWER', 'OUTER', 'INNER']: # alias [up, down, left, right]
-	scrapers[scraper, 'pos'] 			= epics.pv.get_pv(f"SR11SCR01:{scraper}_POSITION_MONITOR") 
-	scrapers[scraper, 'sp'] 			= epics.pv.get_pv(f"SR11SCR01:{scraper}_POSITION_SP") 
-	scrapers[scraper, 'motion_status'] 	= epics.pv.get_pv(f"SR11SCR01:{scraper}_MOTION_STATUS") 
-	scrapers[scraper, 'init_pos'] 		= scrapers[scraper, 'pos'].get() # float
-# Scraper Positions as from 12/09/2023: 
-#     Upper = 20.35 mm
-#     Lower = 14.20 mm
-#     Inner = 24.01 mm
+upper_scraper = Scraper(direction="UPPER")
+upper_scraper.connect()
+
+# --- assign PVs: ODB beam size and position
+ODB_PVs: dict[str, Any] = {}
+ODB_PVs["X_size"] 		= epics.pv.get_pv("SR10BM02IMG01:X_SIZE_MONITOR", connect=True)
+ODB_PVs["X_offset"] 	= epics.pv.get_pv("SR10BM02IMG01:X_OFFSET_MONITOR", connect=True)
+ODB_PVs["Y_size"] 		= epics.pv.get_pv("SR10BM02IMG01:Y_SIZE_MONITOR", connect=True)
+ODB_PVs["Y_offset"] 	= epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)
 
 # --- init save path (format: Data\YYYY-mm-dd\HHMM+'h'\) e.g. 'Data\2025-09-25\0900h\'
-start_time = datetime.datetime.now()
-date_str = start_time.strftime("%Y-%m-%d")
-hours_str = start_time.strftime("%H%Mh")
+start_time 	= datetime.datetime.now()
+date_str 	= start_time.strftime("%Y-%m-%d")
+hours_str 	= start_time.strftime("%H%Mh")
 seconds_str = start_time.strftime("%Ss")
 try:
-	os.makedirs(os.path.join('Data', date_str, hours_str), exist_ok=False)
-	data_path = os.path.join('Data', date_str, hours_str)
+	os.makedirs(os.path.join("Data", date_str, hours_str), exist_ok=False)
+	data_path = os.path.join("Data", date_str, hours_str)
 except OSError: 
 	# if you run the script again in the same minute, it appends seconds to the path name
-	os.makedirs(os.path.join('Data', date_str, hours_str, seconds_str))
-	data_path = os.path.join('Data', date_str, hours_str, seconds_str)
+	os.makedirs(os.path.join("Data", date_str, hours_str, seconds_str))
+	data_path = os.path.join("Data", date_str, hours_str, seconds_str)
 
 # --- init save vectors
-freqs: list[float | None] = []
-current: list[float | None] = []
-timestamps_datetime: list[datetime.datetime] = []
-timestamps_str: list[str] = []
-beam_losses: dict[str, list[float]] = {}
-for key in blmPVs:
+freqs				: list[Union[float, None]] = []
+current				: list[Union[float, None]] = []
+timestamps_datetime	: list[datetime.datetime] = []
+timestamps_str		: list[str] = []
+beam_losses			: dict[str, list[float]] = {}
+beam_loss_window_1 	: dict[str, list[float]] = {}
+beam_loss_window_2 	: dict[str, list[float]] = {}
+for key in blm.loss:
 	beam_losses[key] = []
+	beam_loss_window_1[key] = []
+	beam_loss_window_2[key] = []
+ODB_data : dict[str, list[float]] = {}
+for key in ODB_PVs:
+	ODB_data[key] = []
 projected_end_time: datetime.datetime = start_time + datetime.timedelta(seconds=sweep_time)
 metadata: dict[str, Any] = {
-	'direction': direction, 
-	'duration': time.strftime('%H:%M:%S', time.gmtime(sweep_time)), 
-	'fractional tune': tune,
-	'f_rev': f_rev,
-	'bounds (%)': bounds, 
-	'frequency bounds (kHz)': freq_bounds, 
-	'harmonic': harmonic, 
-	'sweep limits (kHz)': sweep_limits, 
-	'kicker amp (%)': set_kicker_amp, 
-	'drive pattern': set_drive_pattern, 
-	'sweep rate (Hz/s)': sweep_rate, 
-	'sweep step size (Hz)': sweep_step_size, 
-	'sweep span (kHz)': set_sweep_span, 
-	'sweep period (us)': set_sweep_period, 
-	'scraper UPPER init pos': scrapers['UPPER', 'init_pos'],
-	'scraper LOWER init pos': scrapers['LOWER', 'init_pos'],
-	'scraper OUTER init pos': scrapers['OUTER', 'init_pos'],
-	'scraper INNER init pos': scrapers['INNER', 'init_pos'],
-	'scraper UPPER set pos' : set_scraper_upper,
-	'start time': start_time.strftime("%Y-%m-%d %H:%M:%S"),
-	'projected end time': projected_end_time.strftime("%Y-%m-%d %H:%M:%S")
+	"direction": direction, 
+	"duration": time.strftime('%H:%M:%S', time.gmtime(sweep_time)), 
+	"fractional tune": tune,
+	"f_rev": f_rev,
+	"bounds (%)": bounds, 
+	"frequency bounds (kHz)": freq_bounds, 
+	"harmonic": harmonic, 
+	"sweep limits (kHz)": sweep_limits, 
+	"kicker amp (%)": set_kicker_amp, 
+	"drive pattern": set_drive_pattern, 
+	"sweep rate (Hz/s)": sweep_rate, 
+	"sweep step size (Hz)": sweep_step_size, 
+	"sweep span (kHz)": set_sweep_span, 
+	"sweep period (us)": set_sweep_period, 
+	"scraper UPPER init pos": upper_scraper.init_pos,
+	"scraper UPPER set pos" : set_scraper_upper,
+	"start time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+	"projected end time": projected_end_time.strftime("%Y-%m-%d %H:%M:%S")
 }
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -207,20 +222,20 @@ def main():
 	
 	Workflow
 	--------
-		1. Initialises kicker (drive) panel with set amplitude and frequency
-		2. Slowly steps through the requested energy (frequency) range 
-		...(typically at 10 Hz/s, physically updates drive frequency in 0.5 Hz steps)
-		3. Reads the beam loss for every monitor and drive frequency (readback at 1 Hz)
-		4. Updates progress to stdout every n_minutes
-		5. Turns off kicker drive and resets BLM gain voltages and attenuations, scrapers
-		...saves and plots data on experiment end or KeyboardInterrupt
+	- Initialises kicker (drive) panel with set amplitude and frequency
+	- Slowly steps through the requested energy (frequency) range 
+	...(typically at 10 Hz/s, physically updates drive frequency in 0.5 Hz steps)
+	- Reads the beam loss for every monitor and drive frequency (readback at 20 Hz)
+	- Updates progress to stdout every n_minutes
+	- Turns off kicker drive and resets BLM gain voltages and attenuations, scrapers
+	...saves and plots data on experiment end or KeyboardInterrupt
 
 	To be implemented
 	-----------------
-		1. Changing the adc_counts_offset and _window to record beam loss on the polarised and 
-		...depolarised parts of the beam separately
-		2. The ratio of the depolarised/polarised beam losses will then normalise out spurrious depolarisation events,
-		...e.g. ID gap changes, magnet instabilities, etc.
+	- Changing the adc_counts_offset and _window to record beam loss on the polarised and 
+	...depolarised parts of the beam separately
+	- The ratio of the depolarised/polarised beam losses will then normalise out spurrious depolarisation events,
+	...e.g. ID gap changes, magnet instabilities, etc.
 
 	"""
 	print('\nBeginning Resonant Depolarisation experiment! Metadata:...')
@@ -229,36 +244,38 @@ def main():
 
 	try:
 		# init start time
-		log_frequency	: float = 2 # Hz
+		log_frequency	: float = 10			# Hz
 		last_log_call	: float = time.time()
 		last_update_call: float = time.time()
-		n_minutes		: int = 5
-		
-		# ! libera BLM currently not implemented
-		# init libera+ windows
-		# libera.put_adc_windows(
-		# 	adc_offset_1=set_adc_offset_1, 
-		# 	adc_window_1=set_adc_window_1, 
-		# 	adc_offset_2=set_adc_offset_2, 
-		# 	adc_window_2=set_adc_window_2,)
+		n_minutes		: int 	= 5
 
-		# ! BLM settings - also not currently implemented
-		# change BLM Vgc and atten
-		# These are reset on exit
-		# e.g.
-		# blm_atten_decay_PVs['11A'].put(30)
-		# blm_atten_decay_PVs['11B'].put(30)
+		# for all libera units with incorrect t0_decimation, correct:
+		for key in blm.t0_interval:
+			if blm.init_t0_interval[key] != blm.init_t0_interval_expected[key]:
+				blm.t0_interval[key].put(blm.init_t0_interval_expected[key], use_complete=True)
+				# wait for put to complete
+				while not blm.t0_interval[key].put_complete:
+					time.sleep(0.1)
 
-		# ! scrapers - also not currently implemented
-		# init scrapers (in)
-		scrapers['UPPER', 'sp'].put(set_scraper_upper)
-		last_move_time = time.time()
-		while scrapers['UPPER', 'motion_status'] == 1:
-			time.sleep(0.5)
-			# exit loop if motor takes longer than two minutes to move
-			if (time.time() - last_move_time) >= 120: # seconds
-				print(f"WARNING! UPPER scraper took more than two minutes to move. Continuing...")
-				break
+		# init liberaBLM ADC windows
+		for key in blm.adc_counter_offset_1:
+			blm.adc_counter_offset_1[key].put(set_adc_counter_offset_1, use_complete=True)
+			blm.adc_counter_window_1[key].put(set_adc_counter_window_1, use_complete=True)
+			blm.adc_counter_offset_2[key].put(set_adc_counter_offset_2, use_complete=True)
+			blm.adc_counter_window_2[key].put(set_adc_counter_window_2, use_complete=True)
+		# wait for puts to complete
+		for key in blm.adc_counter_offset_1:
+			while not all(
+				[blm.adc_counter_offset_1[key].put_complete,
+				 blm.adc_counter_window_1[key].put_complete,
+				 blm.adc_counter_offset_2[key].put_complete,
+				 blm.adc_counter_window_2[key].put_complete]
+			):
+				time.sleep(0.1)
+
+		# init scrapers (put in)
+		# Do each scraper individually, a bit safer
+		upper_scraper.move(position=set_scraper_upper)
 
 		# init kicker drive
 		sweep_span.put(set_sweep_span) 		# kHz
@@ -295,39 +312,26 @@ def main():
 	finally:
 		# turn off kicker
 		kicker_amp.put(0)
-		# ! restore blm settings to init values - to be added
 		# move scrapers back
-		# move scrapers back
-		try:
-			for scraper in ['UPPER', 'LOWER', 'OUTER', 'INNER']:
-				last_move_time: float = time.time()
-				scrapers[scraper, 'sp'].put(scrapers[scraper, 'init_pos'])
-				# Wait until the current scraper has stopped moving before moving the next one
-				while scrapers[scraper, 'motion_status'] == 1:
-					time.sleep(0.5)
-					# exit loop if motor takes longer than two minutes to move
-					if (time.time() - last_move_time) >= 120: # seconds
-						print(f"WARNING! {scraper} scraper took more than two minutes to move. Continuing...")
-						break
-		except Exception:
-			print(traceback.format_exc())
-		finally: 
-			print("scrapers put back -- remove try block if no errors")
-			
-		# ! libera BLM currently not implemented
-		# restore libera+ window settings
-		# libera.restore_init_adc_windows()
+		upper_scraper.moveOut()	
+		# restore epicsBLM window settings - change to 'all' for blm settings as well
+		blm.restore_inits(mode="adc_counter_masks")
+		blm.restore_inits(mode="decimation")
 		# cleanup
 		save_data()
-		plot_data()
+		# plot_all_data()
+		plot_data(data=beam_losses, filename='Loss_all_sectors')
+		plot_data(data=beam_losses, current_normalised=True, filename='Loss_all_sectors_current_normalised')
+		plot_data(data=beam_loss_window_1, filename='Loss_window_1')
+		plot_data(data=beam_loss_window_2, filename='Loss_window_2')
 		print('\nExperiment finished!')
-
+		
 # --------------------------------------------------------------------------------------------------------------------
 #
 # --- PV logger operating at 1 Hz
 def log_data():
 	"""
-	Appends PV values to python lists at log_freqency Hz. \\
+	Appends PV values to python lists at log_frequency Hz. \\
 	Stored in memory until save_data() is called.
 	"""
 	timestamp = datetime.datetime.now()
@@ -336,8 +340,12 @@ def log_data():
 	timestamps_str.append(timestamp_str)
 	freqs.append(sweep_freq_act.get()) 				# kHz
 	current.append(dcct.get())						# A
-	for key in blmPVs:
-		beam_losses[key].append(blmPVs[key].get())	# Counts
+	for key in blm.loss:
+		beam_losses[key].append(blm.loss[key].get())	# Counts
+		beam_loss_window_1[key].append(blm.adc_counter_loss_1[key].get())
+		beam_loss_window_2[key].append(blm.adc_counter_loss_2[key].get())
+	for key in ODB_data:
+		ODB_data[key].append(ODB_PVs[key].get()) # um
 
 # --------------------------------------------------------------------------------------------------------------------
 #
@@ -390,7 +398,7 @@ def save_data():
 	# beam losses, as both .json:
 	with open(os.path.join(data_path, 'beam_losses.json'), 'w') as f:
 		json.dump(beam_losses, f)
-	
+
 	# ... and .csv:
 	bl_keys = list(beam_losses.keys())
 	bl_rows = zip(*[beam_losses[key] for key in bl_keys])
@@ -399,13 +407,34 @@ def save_data():
 		writer.writerow(bl_keys)  # headers
 		writer.writerows(bl_rows) # values
 
+	# adc counter loss 1
+	with open(os.path.join(data_path, 'adc_counter_loss_1.json'), 'w') as f:
+		json.dump(beam_loss_window_1, f)
+
+	# adc counter loss 2
+	with open(os.path.join(data_path, 'adc_counter_loss_2.json'), 'w') as f:
+		json.dump(beam_loss_window_2, f)
+
+	# ODB size and offset
+	with open(os.path.join(data_path, 'ODB_data.json'), "w") as f:
+		json.dump(ODB_data, f)
+	
+
 	print("\n Data saved!")
 
 # --------------------------------------------------------------------------------------------------------------------
 #
-def plot_data():
+# Format energy to freq conversion for plotting
+def energy_calc(freq):
+	return (freq/f_rev - harmonic + 6) * m_e*c**2/(e*a_g*1e9)
+def freq_calc(energy):
+	return f_rev * (energy*1e9*e*a_g/(m_e*c**2) + harmonic - 6)
+
+# --------------------------------------------------------------------------------------------------------------------
+#
+def plot_all_data():
 	"""
-	Plots every BLM against frequency and energy (conversion from freuquency, plotted on top axis)
+	Plots every BLM against frequency and energy (conversion from frequency, plotted on top axis
 	"""
 	try:
 		# convert to array
@@ -425,11 +454,6 @@ def plot_data():
 		axs[0].set_title('All sectors')
 		axs[0].set_xlabel('frequency (kHz)')
 
-		# Create energy top axis
-		def energy_calc(freq):
-			return (freq/f_rev - harmonic + 6) * m_e*c**2/(e*a_g*1e9)
-		def freq_calc(energy):
-			return f_rev * (energy*1e9*e*a_g/(m_e*c**2) + harmonic - 6)
 		second_axis = axs[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
 		second_axis.set_xlabel('Energy (GeV)')
 
@@ -473,12 +497,134 @@ def plot_data():
 		plt.savefig(os.path.join(data_path, "current_normalised_all_sectors_beam_loss.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
 		plt.show()
+
+
+		# ----------------------------------- #
+		# ------	ADC counter loss 	----- #
+		# ----------------------------------- #
+		#
+
+		# --- plot data
+		fig3, axs3 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
+
+		# plot normalised data:
+		for index, key in enumerate(beam_loss_window_1):
+			# Colour straight, make corresponding arc black
+			if index % 2 == 0:
+				axs3[0].plot(freqs_array, beam_loss_window_1[key]/np.max(beam_loss_window_1[key]) - 0.15*index, '-', label=key)
+			else:
+				axs3[0].plot(freqs_array, beam_loss_window_1[key]/np.max(beam_loss_window_1[key]) - 0.15*index, '-', color='k', label=key)	
+			axs3[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
+		axs3[0].set_title('ADC counter loss 1 - All sectors')
+		axs3[0].set_xlabel('frequency (kHz)')
+
+		# Create energy top axis
+		second_axis = axs3[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
+		second_axis.set_xlabel('Energy (GeV)')
+
+		# plot just sector 11 (normalised)
+		axs3[1].plot(freqs_array, beam_loss_window_1['11A']/np.max(beam_loss_window_1['11A']), '-', label='11A')
+		axs3[1].plot(freqs_array, beam_loss_window_1['11B']/np.max(beam_loss_window_1['11B']) + 0.15, '-', label='11B')
+		axs3[1].legend(loc='lower right')
+		axs3[1].set_title('Sector 11')
+
+		plt.savefig(os.path.join(data_path, "ADC_counter_loss_1.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+		
+		
+		# --- plot data
+		fig4, axs4 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
+
+		# plot normalised data:
+		for index, key in enumerate(beam_loss_window_2):
+			# Colour straight, make corresponding arc black
+			if index % 2 == 0:
+				axs4[0].plot(freqs_array, beam_loss_window_2[key]/np.max(beam_loss_window_2[key]) - 0.15*index, '-', label=key)
+			else:
+				axs4[0].plot(freqs_array, beam_loss_window_2[key]/np.max(beam_loss_window_2[key]) - 0.15*index, '-', color='k', label=key)	
+			axs4[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
+		axs4[0].set_title('ADC counter loss 2 - All sectors')
+		axs4[0].set_xlabel('frequency (kHz)')
+
+		# Create energy top axis
+		second_axis = axs4[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
+		second_axis.set_xlabel('Energy (GeV)')
+
+		# plot just sector 11 (normalised)
+		axs4[1].plot(freqs_array, beam_loss_window_2['11A']/np.max(beam_loss_window_2['11A']), '-', label='11A')
+		axs4[1].plot(freqs_array, beam_loss_window_2['11B']/np.max(beam_loss_window_2['11B']) + 0.15, '-', label='11B')
+		axs4[1].legend(loc='lower right')
+		axs4[1].set_title('Sector 11')
+
+		plt.savefig(os.path.join(data_path, "adc_counter_loss_2.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 	
 	# Dont stop if plotting goes wrong
 	finally:
 		pass
-
+#
 # --------------------------------------------------------------------------------------------------------------------
+def plot_data(data: dict[str, list[float]], current_normalised: bool = False, filename: str = 'default'):
+	"""
+	Plots every BLM against frequency and energy (conversion from frequency, plotted on top axis)
+
+	Parameters
+	----------
+	data: dict[str, list[float]]
+		Beam loss data which is a dictonary, containing loss for each sector and section
+	current_normalised: bool
+		Switch for (beam) current normalisation (yes/no)
+	filename: str
+		Filename for saving the plot .png
+	"""
+	try:
+		# convert to array
+		freqs_array = np.array(freqs)
+
+		# --- normalise data
+		data_norm = {}
+		if current_normalised:
+			data_current_norm = {}
+			for key in data:
+				data_current_norm[key] = np.array(data[key])/(np.array(current)**2)
+				data_norm[key] = data_current_norm[key]/np.max(data_current_norm[key])
+		else:
+			for key in data:
+				data_norm[key] = data[key]/np.max(data[key])
+		
+		
+		# --- plot data
+		fig, axs = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
+
+		# plot normalised data:
+		
+		for index, key in enumerate(data_norm):
+			# Colour straight, make corresponding arc black
+			if index % 2 == 0:
+				axs[0].plot(freqs_array, data_norm[key] - 0.15*index, '-', label=key)
+			else:
+				axs[0].plot(freqs_array, data_norm[key] - 0.15*index, '-', color='k', label=key)	
+			axs[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
+		axs[0].set_title('All sectors')
+		axs[0].set_xlabel('frequency (kHz)')
+
+		# Create energy top axis
+		second_axis = axs[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
+		second_axis.set_xlabel('Energy (GeV)')
+
+		# plot just sector 11 (normalised)
+		axs[1].plot(freqs_array, data_norm['11A'], '-', label='11A')
+		axs[1].plot(freqs_array, data_norm['11B'] + 0.15, '-', label='11B')
+		axs[1].legend(loc='lower right')
+		axs[1].set_title('Sector 11')
+
+		# if no filename, pass datetime stamp
+		if filename == 'default':
+			filename = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
+
+		plt.savefig(os.path.join(data_path, filename + '.png'), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+	
+	finally:
+		# I dont want the code to finish if plotting throws an error
+		pass
 #
 # Initiate experiment
 main()

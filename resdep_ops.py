@@ -10,7 +10,7 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import traceback
-from epicsBLMs import epicsBLMs
+from epicsBLMs import BLMs
 
 # --- Constants
 # * Fractional spin tune
@@ -236,7 +236,7 @@ def main():
 
 	try:
 		# init start time
-		log_frequency	: float = 2 # Hz
+		log_frequency	: float = 20 # Hz
 		last_log_call	: float = time.time()
 		last_update_call: float = time.time()
 		n_minutes		: int = 5
@@ -280,7 +280,7 @@ def main():
 			set_sweep_freq += sweep_step_size*1e-3 	# kHz
 			time.sleep(dwell_time) # propto sweep rate with frequency step
 
-			# --- Call log_data() at 2 Hz 
+			# --- Call log_data() at 1/log_frequency
 			if (time.time() - last_log_call) >= (1/log_frequency):
 				# ? Later implementation -- turn off kicker for 1s before data collection to damp driven betatron oscillations
 				# NOTE this doubles experiment time and will have to be updated in the metadata / print statement
@@ -334,9 +334,11 @@ def main():
 # --- PV logger operating at 1 Hz
 def log_data():
 	"""
-	Appends PV values to python lists at log_frequency (typically 1, maybe 2) Hz. \\
+	Appends PV values to python lists at log_frequency (typically 20) Hz. \\
 	Stored in memory until save_data() is called.
 	"""
+	# ? Stress testing indicates this can write PVs at up to ~ 2000 Hz
+	# ? So I think 20 Hz should be fine, same resolution as kicker drive
 	timestamp = datetime.datetime.now()
 	timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 	timestamps_datetime.append(timestamp)

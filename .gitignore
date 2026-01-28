@@ -1,10 +1,15 @@
+__pycache__/
+BLM_fill_pattern/
 BLM_inits/
 Data/
 drive_betatron/
 Figures/
 libera_logs/
 LiberaBLM_python_examples/
-__init__.py
 .python-version
 pyproject.toml
 *test.py
+resdep_OLD.py
+liberaComms.py
+alignBLMtoFillPattern_ADCtoSUM.py
+progressBars.py

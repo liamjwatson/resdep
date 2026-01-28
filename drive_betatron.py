@@ -11,7 +11,9 @@ import logging
 import traceback
 import matplotlib.pyplot as plt
 import numpy as np
-# from liberaComms import LiberaBLM
+from tunes import listen_to_tunes # custom listening function
+from epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions  
+from epicsScrapers import Scraper 
 
 # --- Constants
 f_rev 	: float = 1.38799e3 # kHz
@@ -22,95 +24,56 @@ v_y 	: float = 0.21626 	# 5.219
 v_x_var : float = 0
 v_y_var : float = 0
 
-# --------------------------------------------------------------------------------------------------------------------
-#
-def listen_to_tunes() -> tuple[float, ...]:
-	"""
-	Average tune over 10 s of measurements from BbB. Calculate mean and variance (for sweep_span)
-
-	Returns
-	-------
-	v_x_av : float
-		Average horizontal tune (over 10s data acquisition)
-	v_y_av : float
-		Average vertical tune (over 10s data acquisition)
-	v_x_var : float
-		Variance in the horizontal tune
-	v_y_var : float
-		Variance in the vertical tune
-	"""
-	# init
-	v_x_av = 0
-	v_y_av = 0
-	v_x_var = 0
-	v_y_var = 0
-
-	# grab PVs
-	peaktune_x = epics.pv.get_pv("IGPF:X:SRAM:PEAKTUNE2")
-	peaktune_y = epics.pv.get_pv("IGPF:Y:SRAM:PEAKTUNE2")
-	# store readback
-	peaktune_x_readback : list[Union[float, None]] = []
-	peaktune_y_readback : list[Union[float, None]] = []
-
-	print("Lisitening to tunes for 10s...")
-	start_time = time.time()
-
-	while (time.time() - start_time) <= 10:
-		peaktune_x_readback.append(peaktune_x.get())
-		peaktune_y_readback.append(peaktune_y.get())
-		time.sleep(1)
-
-	if (not None in peaktune_x_readback) and (not None in peaktune_y_readback):
-		v_x_av 	: float = np.mean(np.array(peaktune_x_readback), dtype=float)
-		v_y_av 	: float = np.mean(np.array(peaktune_y_readback), dtype=float)
-		v_x_var : float = np.var(np.array(peaktune_x_readback), dtype=float)
-		v_y_var : float = np.var(np.array(peaktune_y_readback), dtype=float)
-	else:
-		raise ArithmeticError("Peaktune_readback returned None, no mean can be calculated.")
+v_x, v_y, v_x_var, v_y_var = listen_to_tunes()
 
 
-	print("Tune averages and variances calculated!")
-	print(f"v_x = {v_x_av}, var = {v_x_var}")
-	print(f"v_y = {v_y_av}, var = {v_y_var}")
-
-	return v_x_av, v_y_av, v_x_var, v_y_var
-
-# get tunes from BbB?
-tunes_from_BbB: bool = False
-
-response = input("Use betatron tunes from BbB? (y/n): ").strip().lower()
-if response == 'y':
-	v_x, v_y, v_x_var, v_y_var = listen_to_tunes()
-	tunes_from_BbB = True
-	
-response = input("Do you want to calculate f_rev from master RF? (y/n): ")
-if response == 'y':
-	masterRF = epics.pv.get_pv('SR00MOS01:FREQUENCY_MONITOR')
-	masterRFact: Union[float, Any] = masterRF.get()			# Hz
-	if masterRFact is not None:
-		f_rev: float = 1e-3 * masterRFact/360 	# kHz
-	else:
-		raise ValueError("masterRF.get() returned 'None'. Exiting...")
+# Grab masterRF from EPICS
+# if disconnected, .get() will return none and f_rev with throw exception
+masterRF = epics.pv.get_pv('SR00MOS01:FREQUENCY_MONITOR')
+masterRFact: Union[float, None] = masterRF.get(timeout=1)			# Hz
+try:
+	f_rev: float = 1e-3 * masterRFact/360 	# kHz # pyright: ignore[reportOperatorIssue] 
+except TypeError: # ^ masterRFact might be None
+	print("Could not grab master RF from EPICS (weird?). Using default f_rev")
 
 
 # --- exp variables
 direction 					: str	 = 'Y'		# 'X' or 'Y'
 tune 						: float	 = v_y 		# v_x or v_y
 harmonic 					: int	 = 0		# int >= 0
-set_kicker_amp 				: float	 = 0.05 		# %
+set_kicker_amp 				: float	 = 0.01 		# %
+no_scraper_duration 		: float  = 30 		# seconds
 baseline_duration 			: int	 = 30 		# seconds
-exp_duration				: int	 = 5 * 60 	# seconds
-set_drive_pattern 			: str	 = '200:220'		# 'num', 'start:stop', '!num' for not num / range, or '!' for all
-set_feedback_mask 			: str	 = "!200:220"	# 'num', 'start:stop', '!num' for not num / range, or '!' for all
-set_acquisition_mask_SRAM 	: str	 = "200:220"		# 'num', 'start:stop', '!num' for not num / range, or '!' for all. Should be same as drive pattern. 
-set_acquisition_mask_BRAM 	: str	 = "200:220"	# 'num', 'start:stop', '!num' for not num / range, or '!' for all
+exp_duration				: int	 = 3 * 60 	# seconds
+set_drive_pattern 			: str	 = "1:180"		# 'num', 'start:stop', '!num' for not num / range, or '!' for all
+set_feedback_mask 			: str	 = "!1:180"	# 'num', 'start:stop', '!num' for not num / range, or '!' for all
+set_acquisition_mask_SRAM 	: str	 = "!1:180"		# 'num', 'start:stop', '!num' for not num / range, or '!' for all. Should be same as drive pattern. 
+set_acquisition_mask_BRAM 	: str	 = "!1:180"	# 'num', 'start:stop', '!num' for not num / range, or '!' for all
 set_sweep_period 			: float	 = 1e3 		# us
-set_scraper_upper			: float  = 22.00 	# mm
 tune_variance 				: float	 = 1e-4
 # if tunes_from_BbB and tune == v_x:
 	# tune_variance = v_x_var 
 # if tunes_from_BbB and tune == v_y:
 	# tune_variance = v_y_var 
+
+# --- Scrapers
+set_scraper_upper	: float  = 20.35 	# mm, Default = 20.35, set = 21.50
+set_scraper_lower	: float  = 14.20 	# mm, Default = 14.20, set = ???
+set_scraper_inner	: float  = 33.50 	# mm, Default = 24.01, set = 34.50
+
+# --- ADC counter masks
+set_adc_counter_offset_1: int = 0
+set_adc_counter_window_1: int = 8
+set_adc_counter_offset_2: int = 8
+set_adc_counter_window_2: int = 8
+
+
+# --- blm DECAY Vgc and att values
+# set_decay_Vgc_11A: int = 30
+# set_decay_Vgc_11B: int = 30
+# set_decay_att_11A: int = 30
+# set_decay_att_11B: int = 30
+
 
 # --- calcs
 intrinsic_res_freq 	= f_rev * (tune + 0)		# 0th order, kHz
@@ -124,103 +87,102 @@ if not response == 'y':
 
 # --------------------------------------------------------------------------------------------------------------------
 #
+print("Initialising PVs...")
+
 # --- assign PVs: BbB Drive
-sweep_freq 		= epics.pv.get_pv('IGPF:'+direction+':DRIVE:FREQ')
-sweep_span 		= epics.pv.get_pv('IGPF:'+direction+':DRIVE:SPAN')
-sweep_period 	= epics.pv.get_pv('IGPF:'+direction+':DRIVE:PERIOD')
-kicker_amp 		= epics.pv.get_pv('IGPF:'+direction+':DRIVE:AMPL')
-pattern 		= epics.pv.get_pv('IGPF:'+direction+':DRIVE:PATTERN')
+sweep_freq 		= epics.pv.get_pv(f"IGPF:{direction}:DRIVE:FREQ", connect=True)
+sweep_span 		= epics.pv.get_pv(f"IGPF:{direction}:DRIVE:SPAN", connect=True)
+sweep_period 	= epics.pv.get_pv(f"IGPF:{direction}:DRIVE:PERIOD", connect=True)
+kicker_amp 		= epics.pv.get_pv(f"IGPF:{direction}:DRIVE:AMPL", connect=True)
+pattern 		= epics.pv.get_pv(f"IGPF:{direction}:DRIVE:PATTERN", connect=True)
 
 # --- assign PVs: current
 dcct = epics.pv.get_pv('SR11BCM01:CURRENT_MONITOR')
 
 # --- assign PVs: Drive mask
-feedback_mask 			= epics.pv.get_pv("IGPF:"+direction+":FB:PATTERN")
-acquisition_mask_SRAM 	= epics.pv.get_pv("IGPF:"+direction+":SRAM:ACQ:PATTERN")
-acquisition_mask_BRAM 	= epics.pv.get_pv("IGPF:"+direction+":BRAM:ACQ:PATTERN")
+feedback_mask 			= epics.pv.get_pv(f"IGPF:{direction}:FB:PATTERN", connect=True)
+acquisition_mask_SRAM 	= epics.pv.get_pv(f"IGPF:{direction}:SRAM:ACQ:PATTERN", connect=True)
+acquisition_mask_BRAM 	= epics.pv.get_pv(f"IGPF:{direction}:BRAM:ACQ:PATTERN", connect=True)
 # grab initial BbB feedback values to reset on exit
 init_feedback_mask 			: Union[str, Any] = feedback_mask.get()
 init_acquisition_mask_SRAM 	: Union[str, Any] = acquisition_mask_SRAM.get()
 init_acquisition_mask_BRAM 	: Union[str, Any] = acquisition_mask_BRAM.get()
 
 # --- assign PVs : BLMs 
-blmPVs = {}
-# loop over all sectors
-for i in range(1,14+1,1):
-	# Collect both straight ('A') and arc ('B') BLMs
-	for letter in ['A', 'B']:
-		blmPVs[str(i)+letter] = epics.pv.get_pv(f'SR{i:02d}BLM01:SIGNALS_SA_'+letter+'_MONITOR')
+blm = BLMs()
+blm.get_loss_PVs()
+blm.get_adc_counter_mask_PVs()
+time.sleep(2) # give all the PVs a sec to catch up
+blm.get_init_adc_counter_masks()
+blm.get_settings_PVs()
+time.sleep(2) # give all the PVs a sec to catch up
+blm.get_init_settings()
 
 # --- assign PVs: scrapers (up, down, left, right)
-scrapers: dict[tuple[str, ...], Any] = {}
-for scraper in ['UPPER', 'LOWER', 'OUTER', 'INNER']: # alias [up, down, left, right]
-	scrapers[scraper, 'pos'] 			= epics.pv.get_pv(f"SR11SCR01:{scraper}_POSITION_MONITOR") 
-	scrapers[scraper, 'sp'] 			= epics.pv.get_pv(f"SR11SCR01:{scraper}_POSITION_SP") 
-	scrapers[scraper, 'motion_status'] 	= epics.pv.get_pv(f"SR11SCR01:{scraper}_MOTION_STATUS") 
-	scrapers[scraper, 'init_pos'] 		= scrapers[scraper, 'pos'].get() # float
+upper_scraper = Scraper(direction="UPPER")
+upper_scraper.connect()
 # Scraper Positions as from 12/09/2023: 
 #     Upper = 20.35 mm
 #     Lower = 14.20 mm
 #     Inner = 24.01 mm
 
-# --- assign PVs : BLM settings
-# --- assign PVs : BLM settings
-# ! currently not implemented (esp in main())
-# blm = epicsBLMs()
-# blm.get_loss_PVs()
-# blm.get_settings_PVs()
-# blm.get_init_settings()
+# --- assign PVs: ODB beam size and position
+ODB_PVs: dict[str, Any] = {}
+ODB_PVs["X_size"] 		= epics.pv.get_pv("SR10BM02IMG01:X_SIZE_MONITOR", connect=True)
+ODB_PVs["X_offset"] 	= epics.pv.get_pv("SR10BM02IMG01:X_OFFSET_MONITOR", connect=True)
+ODB_PVs["Y_size"] 		= epics.pv.get_pv("SR10BM02IMG01:Y_SIZE_MONITOR", connect=True)
+ODB_PVs["Y_offset"] 	= epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)
 
-
+print("PVs grabbed!")
 
 # --- init save path (format: Data\YYYY-mm-dd\HHMM+'h'\) e.g. 'Data\2025-09-25\0900h\'
-if not os.path.isdir('drive_betatron'):
-	os.mkdir('drive_betatron')
-if not os.path.isdir(os.path.join('drive_betatron', 'Data')):
-	os.mkdir(os.path.join('drive_betatron', 'Data'))
-start_datetime = datetime.datetime.now()
-date_str = start_datetime.strftime("%Y-%m-%d")
-hours_str = start_datetime.strftime("%H%Mh")
+start_datetime 	= datetime.datetime.now()
+date_str 	= start_datetime.strftime("%Y-%m-%d")
+hours_str 	= start_datetime.strftime("%H%Mh")
 seconds_str = start_datetime.strftime("%Ss")
-if not os.path.isdir(os.path.join('drive_betatron','Data', date_str)):
-	os.mkdir(os.path.join('drive_betatron', 'Data', date_str))
-if not os.path.isdir(os.path.join('drive_betatron', 'Data', date_str, hours_str)):
-	os.mkdir(os.path.join('drive_betatron', 'Data', date_str, hours_str))
-	data_path = os.path.join('drive_betatron', 'Data', date_str, hours_str)
-else: 
+try:
+	os.makedirs(os.path.join("drive_betatron", "Data", date_str, hours_str), exist_ok=False)
+	data_path = os.path.join("drive_betatron", "Data", date_str, hours_str)
+except OSError: 
 	# if you run the script again in the same minute, it appends seconds to the path name
-	os.mkdir(os.path.join('drive_betatron', 'Data', date_str, hours_str, seconds_str))
-	data_path = os.path.join('drive_betatron', 'Data', date_str, hours_str, seconds_str)
+	os.makedirs(os.path.join("drive_betatron", "Data", date_str, hours_str, seconds_str))
+	data_path = os.path.join("drive_betatron", "Data", date_str, hours_str, seconds_str)
+
 
 # --- init save vectors
-timestamps_datetime: list[datetime.datetime] = []
-timestamps_str: list[str] = []
-current: list[str] = []
-beam_losses: dict[str, list[float]] = {}
-for key in blmPVs:
+timestamps_datetime : list[datetime.datetime] = []
+timestamps_str 		: list[str] = []
+current 			: list[Union[str, None]] = []
+beam_losses			: dict[str, list[float]] = {}
+beam_loss_window_1 	: dict[str, list[float]] = {}
+beam_loss_window_2 	: dict[str, list[float]] = {}
+for key in blm.loss:
 	beam_losses[key] = []
+	beam_loss_window_1[key] = []
+	beam_loss_window_2[key] = []
+ODB_data : dict[str, list[float]] = {}
+for key in ODB_PVs:
+	ODB_data[key] = []
 metadata: dict[str, Any] = {
-	'direction': direction, 
-	'fractional tune': tune,
-	'f_rev (kHz)': f_rev,
-	'resonant frequency (kHz)': res_freq,
-	'harmonic': harmonic, 
-	'kicker amp (%)': set_kicker_amp, 
-	'drive pattern': set_drive_pattern, 
-	'initial feedback mask': init_feedback_mask,
-	'initial acquisition mask (SRAM)': init_acquisition_mask_SRAM,
-	'initial acquisition mask (BRAM)': init_acquisition_mask_BRAM,
-	'set feedback mask': set_feedback_mask,
-	'set acquisition mask (SRAM)': set_acquisition_mask_SRAM,
-	'set acquisition mask (BRAM)': set_acquisition_mask_BRAM,
-	'scraper UPPER init pos': scrapers['UPPER', 'init_pos'],
-	'scraper LOWER init pos': scrapers['LOWER', 'init_pos'],
-	'scraper OUTER init pos': scrapers['OUTER', 'init_pos'],
-	'scraper INNER init pos': scrapers['INNER', 'init_pos'],
-	'scraper UPPER set pos' : set_scraper_upper,
-	'baseline duration (s)': baseline_duration,
-	'experiment duration (s)': exp_duration,
-	'start time': start_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+	"direction": direction, 
+	"fractional tune": tune,
+	"f_rev (kHz)": f_rev,
+	"resonant frequency (kHz)": res_freq,
+	"harmonic": harmonic, 
+	"kicker amp (%)": set_kicker_amp, 
+	"drive pattern": set_drive_pattern, 
+	"initial feedback mask": init_feedback_mask,
+	"initial acquisition mask (SRAM)": init_acquisition_mask_SRAM,
+	"initial acquisition mask (BRAM)": init_acquisition_mask_BRAM,
+	"set feedback mask": set_feedback_mask,
+	"set acquisition mask (SRAM)": set_acquisition_mask_SRAM,
+	"set acquisition mask (BRAM)": set_acquisition_mask_BRAM,
+	"scraper UPPER init pos": upper_scraper.init_pos,
+	"scraper UPPER set pos" : set_scraper_upper,
+	"baseline duration (no scraper)": no_scraper_duration,
+	"baseline duration (s)": baseline_duration,
+	"experiment duration (s)": exp_duration,
+	"start time": start_datetime.strftime("%Y-%m-%d %H:%M:%S"),
 }
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -247,47 +209,56 @@ def main():
 	"""
 	try:
 
-		# init scrapers (in)
-		scrapers['UPPER', 'sp'].put(set_scraper_upper)
-		last_move_time = time.time()
-		while scrapers['UPPER', 'motion_status'] == 1:
-			time.sleep(0.5)
-			# exit loop if motor takes longer than two minutes to move
-			if (time.time() - last_move_time) >= 120: # seconds
-				print(f"WARNING! UPPER scraper took more than two minutes to move. Continuing...")
-				break
+
+		# # Log data without kicker drive OR SCRAPER enabled for beam loss baseline for 10 s
+		# start_time: float = time.time()
+		# print("Collecting baseline data WITHOUT SCRAPERS (or kicker) for 10 s...")
+		# while (time.time() - start_time) < no_scraper_duration:
+		# 	# Nothing goes here... we log at 2 Hz
+		# 	time.sleep(0.5)
+		# 	# log data at 2 Hz (only relevant to above sleep time)
+		# 	log_data()
+		# print("Done!")
+
+		# init liberaBLM ADC windows
+		print("Changing adc_counter_masks...")
+		for key in blm.adc_counter_offset_1:
+			blm.adc_counter_offset_1[key].put(set_adc_counter_offset_1)
+			blm.adc_counter_window_1[key].put(set_adc_counter_window_1)
+			blm.adc_counter_offset_2[key].put(set_adc_counter_offset_2)
+			blm.adc_counter_window_2[key].put(set_adc_counter_window_2)
+
+		# init scrapers (put in)
+		# Do each scraper individually, a bit safer
+		upper_scraper.move(position=set_scraper_upper)
+
+		# change BLM Vgc and atten
+		# These are reset on exit
+		# print("Changing BLM settings...")
+		# blm.decay_Vgc['11A'].put()
+		# blm.decay_Vgc['11B'].put()
+		# blm.decay_att['11A'].put(set_decay_att_11A)
+		# blm.decay_att['11B'].put(set_decay_att_11B)
+		# print("BLM settings changed!")
+
 
 		# Log data without kicker drive enabled for beam loss baseline for 10 s
 		start_time: float = time.time()
-		print("\nCollecting baseline data for {0} s...".format(int(baseline_duration)))
+		print("Collecting baseline data for {0} s...".format(int(baseline_duration)))
 		while (time.time() - start_time) < baseline_duration:
-			# Nothing goes here... we log at 1 Hz
-			time.sleep(1)
-			# log data at 1 Hz (only relevant to above sleep time)
+			# Nothing goes here... we log at 2 Hz
+			time.sleep(0.5)
+			# log data at 2 Hz (only relevant to above sleep time)
 			log_data()
 
-		# ! libera BLM currently not implemented
-		# init libera+ windows
-		# libera.put_adc_windows(
-		# 	adc_offset_1=set_adc_offset_1, 
-		# 	adc_window_1=set_adc_window_1, 
-		# 	adc_offset_2=set_adc_offset_2, 
-		# 	adc_window_2=set_adc_window_2,)
-
-		# ! BLM settings - also not currently implemented
-		# change BLM Vgc and atten
-		# These are reset on exit
-		# e.g.
-		# blm_atten_decay_PVs['11A'].put(30)
-		# blm_atten_decay_PVs['11B'].put(30)
-
-		# Drive betatron after 10 s
 		# init masks
+		print("Changing BbB feedback masks...")
 		feedback_mask.put(set_feedback_mask)
 		acquisition_mask_SRAM.put(set_acquisition_mask_SRAM)
 		acquisition_mask_BRAM.put(set_acquisition_mask_BRAM)
 
 		# init kicker drive
+		print("\nTurning on kicker...")
 		sweep_span.put(set_sweep_span)		
 		sweep_period.put(set_sweep_period)	
 		pattern.put(set_drive_pattern)
@@ -297,14 +268,13 @@ def main():
 		last_update_call: float = time.time()
 
 		# start experiment 
-		print("\nTurning on kicker...")
+		print(f"Collecting driven data for {exp_duration} s...")
 		while (time.time() - start_time) <= (exp_duration + baseline_duration):
 			# Nothing goes here... we just sit driving at the betatron tune
-			time.sleep(1)
-			# log data at 1 Hz (only relevant to above sleep time)
+			time.sleep(0.5)
+			# log data at 2 Hz (only relevant to above sleep time)
 			log_data()
 
-			# ! This log is not working for now
 			# --- Send progress update to the user every 60 s:
 			if (time.time() - last_update_call) >= 60:
 				time_elapsed : float = time.time() - start_time
@@ -318,27 +288,17 @@ def main():
 	finally:
 		# Turn off kicker
 		kicker_amp.put(0)
-		# Reset BbB masks
+		print("Kicker amp => OFF!")
+		# move scrapers back
+		upper_scraper.moveOut()
+		print("Restoring BbB masks...")
 		feedback_mask.put(init_feedback_mask)
 		acquisition_mask_SRAM.put(init_acquisition_mask_SRAM)
 		acquisition_mask_BRAM.put(init_acquisition_mask_BRAM)
-		# ! restore blm settings to init values -- to be added
-		# move scrapers back
-		try:
-			for scraper in ['UPPER', 'LOWER', 'OUTER', 'INNER']:
-				last_move_time: float = time.time()
-				scrapers[scraper, 'sp'].put(scrapers[scraper, 'init_pos'])
-				# Wait until the current scraper has stopped moving before moving the next one
-				while scrapers[scraper, 'motion_status'] == 1:
-					time.sleep(0.5)
-					# exit loop if motor takes longer than two minutes to move
-					if (time.time() - last_move_time) >= 120: # seconds
-						print(f"WARNING! {scraper} scraper took more than two minutes to move. Continuing...")
-						break
-		except Exception:
-			print(traceback.format_exc())
-		finally: 
-			print("scrapers put back -- remove try block if no errors")
+		print("BbB masks restored!")
+		# ADC masks and blm settings (Vgc, att)
+		blm.restore_inits(mode='adc_counter_masks')
+		# cleanup
 		save_data()
 		plot_data()
 		print('\nExperiment finished!')
@@ -355,11 +315,14 @@ def log_data():
 	timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 	timestamps_datetime.append(timestamp)
 	timestamps_str.append(timestamp_str)
-	current_readback: Union[float, Any] = dcct.get()
-	if current_readback is not None:
-		current.append(current_readback)			# A
-	for key in blmPVs:
-		beam_losses[key].append(blmPVs[key].get())	# Counts
+	current.append(dcct.get())			# A
+	for key in blm.loss:
+		beam_losses[key].append(blm.loss[key].get())	# Counts
+		beam_loss_window_1[key].append(blm.adc_counter_loss_1[key].get())
+		beam_loss_window_2[key].append(blm.adc_counter_loss_2[key].get())
+	for key in ODB_data:
+		ODB_data[key].append(ODB_PVs[key].get()) # um
+	
 
 # --------------------------------------------------------------------------------------------------------------------
 #
@@ -412,6 +375,10 @@ def save_data():
 		writer = csv.writer(f)
 		writer.writerow(bl_keys)  # headers
 		writer.writerows(bl_rows) # values
+
+	# ODB size and offset
+	with open(os.path.join(data_path, 'ODB_data.json'), "w") as f:
+		json.dump(ODB_data, f)
 
 	print("\n Data saved!")
 
