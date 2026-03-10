@@ -22,17 +22,19 @@ Workflow
 
 import sys
 import os
+import warnings
 import epics
 import datetime
 import time
-from typing import Any, Literal
+from typing import Any, Literal, Union
 import traceback, logging
 import numpy as np
 import numpy.typing as npt
 import matplotlib.pyplot as plt
 import json
+from scipy.ndimage import gaussian_filter1d
 
-from epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions  
+from resdep.epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions
 # from progressBars import printProgressBar
 
 
@@ -41,19 +43,34 @@ from epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, func
 
 # --- constants
 log_frequency = 10 # Hz
-dwell_time = 2 # s
+dwell_time = 5 # s
 data_points_per_bin = log_frequency * dwell_time 
 # Hard-coding this for first run debugging
 # This can be changed later to blm.init_t0_interval_expected['11']
 SUM_DEC = 86
+buckets_per_cycle = 360/SUM_DEC
+cycles_per_bucket = 1/buckets_per_cycle
+# format: [offset_1, window_1, offset_2, window_2]
+calculated_adc_counter_windows: list[int] = []
+# format start:end, e.g. "0:150"
+depolarised_bunches: str = "" 
+depolarised_bunch_start: int
+depolarised_bunch_end: int
+# initialise adc cycle at loss min > SUM_DEC for error checking
+adc_cycle_at_loss_min: int
+bucket_at_loss_min: int
+FPM_Y_minimum_bucket: int
+# linspace for buckets
+buckets = np.arange(start=1, stop=360+1, step=1)
 
 # define inits
 set_adc_offset: int = 0
-set_adc_window: int = 10
+set_adc_window: int = 5
+window_centre = (set_adc_window-1)//2
 # select counting mode; 0: differential, 1: normal (thresholding)
 set_counting_mode: int = 0
 
-projected_end_time = (SUM_DEC) * dwell_time
+projected_end_time = (SUM_DEC - set_adc_window) * dwell_time
 print("Projected experiment duration: {0:1.1f} minutes.".format(projected_end_time/60))
 response = input("Do you want to continue? y/n?\n")
 if not response == "y":
@@ -77,6 +94,19 @@ time.sleep(2)
 
 # --- assign PVs: current
 dcct = epics.pv.get_pv('SR11BCM01:CURRENT_MONITOR', connect=True)
+# --- assign PVs: IGPF:Y FPM and bucket shift
+# this is in Acc. Sub systems -> Optical Diag B/L -> ODB FPM
+FPM_Y_PV = epics.pv.get_pv("SR00BBB01FPM02:FILL_PATTERN_ABS_WAVEFORM_MONITOR", connect=True)
+bucket_shift_Y_PV = epics.pv.get_pv("SR00BBB01FPM02:BUCKET_SHIFT_SP", connect=True)
+bucket_shift_Y : Union[int, None] = bucket_shift_Y_PV.get() # int
+FPM_Y_offset_array: Union[npt.NDArray[np.float64], None] = FPM_Y_PV.get() # NDArray[np.float64]
+time.sleep(0.5)
+if FPM_Y_offset_array is not None:
+    FPM_Y_offset: list[float] = FPM_Y_offset_array.tolist()
+else:
+    FPM_Y_offset = []
+    warnings.warn("Fill pattern monitor PV returned None. Depolarised bunch calculations won't run.")
+FPM_Y_original:  list[float] = []
 
 
 print("PVs grabbed!")
@@ -111,13 +141,16 @@ metadata: dict[str, Any] = {
     "log frequency": log_frequency,
     "dwell time": dwell_time,
     "data points per bin": data_points_per_bin,
-    "Current": current,
+    "initial adc offset": set_adc_offset,
+    "initial adc window": set_adc_window,
+    "bucket shift IGPF:Y": bucket_shift_Y,
+    "current": current,
     "start time": start_datetime.strftime("%Y-%m-%d %H:%M:%S"),
 }
 	
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #
-def main() -> tuple[list[int], str]:
+def main() -> None:
     """
     Sweeps over ADC offset for minimum ADC window. \\
 	Stores ADC_offset vector and blm.loss for every sector. \\
@@ -129,7 +162,7 @@ def main() -> tuple[list[int], str]:
     global set_adc_offset, set_adc_window
 
     # --- assign PVs: injection trigger
-    injection_trigger = epics.pv.get_pv("TS01EVG01:INJECTION_MODE_STATUS", connect=True, callback=onValueChange)
+    injection_trigger = epics.pv.get_pv("TS01EVG01:INJECTION_MODE_STATUS", connect=True, callback=(onValueChange))
 
     time.sleep(1)
 
@@ -218,18 +251,19 @@ def main() -> tuple[list[int], str]:
         # exp_duration: datetime.timedelta = end_datetime - start_datetime
         metadata["end time"] = end_datetime.strftime("%Y-%m-%d %H:%M:%S"),
 
-        blm.restore_inits(mode="decimation")
         blm.restore_inits(mode="adc_counter_masks")
+        blm.restore_inits(mode="decimation")
 
         bin_data()
         
-        calculated_adc_counter_windows, depolarised_bunches = calculate_adc_counter_windows(sector="11")
+        calculate_adc_counter_windows(sector="8", method="loss_minimum")
+        calculate_adc_counter_windows(sector="8", method="integrated_half")
 
         save_data()
 
         # Remove callback to trigger
         try: 
-            injection_trigger.remove_callback()
+            injection_trigger.remove_callback(0)
         except Exception:
             logging.error(traceback.format_exc())
 
@@ -237,7 +271,7 @@ def main() -> tuple[list[int], str]:
 
         print("Experiment done!")
        
-    return calculated_adc_counter_windows, depolarised_bunches
+    return None
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #
@@ -260,7 +294,7 @@ def bin_data() -> None:
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #
-def calculate_adc_counter_windows(sector: str) -> tuple[list[int], str]:
+def calculate_adc_counter_windows(sector: str, method: Literal["loss_minimum", "integrated_half"] = "loss_minimum") -> None:
     """
     Calculates the offsets and window lengths of the two counter windows for a specific sector \\
     **Note**: this only works for one sector, since there is no way to make the ADC windows wrap around T0. \\
@@ -305,7 +339,7 @@ def calculate_adc_counter_windows(sector: str) -> tuple[list[int], str]:
     and so the line will be locked at 180 +- 30 to keep the split even. These two non-centred cases can be combined since the line can be anywhere \\
     in the empty buckets for the special case, which includes 180 +- 30.
 
-    Returns
+    Updates (global scope)
     -------
     calculated_adc_counter_windows : list[int]
         list containing counters 1 & 2 window and offset settings for the given sector \\
@@ -316,53 +350,88 @@ def calculate_adc_counter_windows(sector: str) -> tuple[list[int], str]:
         This is basically a conversion from the ADC cycles (window length and pos) to bunch number
     """
 
-    # ! I must account for the fill pattern offset in the BBB!
-    # ! Look for the epics GUI, there should be an offset PV
-    # ! They just adjust it so that the fill pattern looks good on the big screens.
+    # global calculated_adc_counter_windows, depolarised_bunches, adc_cycle_at_loss_min, bucket_at_loss_min, FPM_Y_minimum_bucket, depolarised_bunch_start, depolarised_bunch_end, FPM_Y_original
+    global calculated_adc_counter_windows
 
-    # TODO: Look at the manual for ADC delay. Either need to time align the windows or 
-    # TODO: do appropriate calculation of the correct "half" to depolarise, given now the window is 5/10 adc cycles.
-
-
-    # format: [offset_1, window_1, offset_2, window_2]
-    calculated_adc_counter_windows: list[int] = []
-    # format start:end, e.g. "0:150"
-    depolarised_bunches: str = "" 
-
-    buckets_per_cycle = 360/86
-    cycles_per_bucket = 1/buckets_per_cycle
+    
 
     try:
-
-        loss_minimum: float = np.min(replicated_fill_pattern[f"{sector}B"][:,1])
-
-        adc_cycle_at_loss_min: int = np.where(replicated_fill_pattern[f"{sector}B"][:,1] == loss_minimum)[0].tolist()[0]
+          
+        # calculate original fill pattern by undoing offset
+        if FPM_Y_offset is not None:
+                FPM_Y_original = FPM_Y_offset
+        if bucket_shift_Y is not None:
+            for i in range(bucket_shift_Y):
+                FPM_Y_original.insert(0, FPM_Y_original.pop(-1))
+        
+        dividing_line = 0
+        
+        loss_minimum 			: float = np.min(replicated_fill_pattern[f"{sector}B"][:,1])
+        adc_cycle_at_loss_min_index 	= np.where(replicated_fill_pattern[f"{sector}B"][:,1] == loss_minimum)[0].tolist()[0]
+        adc_cycle_at_loss_min 		 	= int(replicated_fill_pattern[f"{sector}B"][adc_cycle_at_loss_min_index,0])
+        bucket_at_loss_min  			= int(adc_cycle_at_loss_min*buckets_per_cycle)
 
         print(f"ADC cycle at loss minimum = {adc_cycle_at_loss_min}")
-
-        # case (1): centred fill pattern
-        if (adc_cycle_at_loss_min <= 30*cycles_per_bucket) or (adc_cycle_at_loss_min >= 330*cycles_per_bucket):
-            # dividing line is the centre of the fill pattern = loss min phase flipped pi/2
-            dividing_line: int = int(np.abs(adc_cycle_at_loss_min - 180*cycles_per_bucket))
+        print(f"bucket at loss minimum = {bucket_at_loss_min}")
         
-        # case (2): Empty buckets are on the left: 
-        elif (adc_cycle_at_loss_min <= 150*cycles_per_bucket):
-            # see notes above
-            dividing_line: int = int(210*cycles_per_bucket)
+        if method == "loss_minimum":
+            print("# --- Mode: loss minimum --- #")
+            # case (0): minimum (offset) is not captured due to finite window size
+            if (adc_cycle_at_loss_min  == window_centre) or (adc_cycle_at_loss_min == (SUM_DEC - window_centre - 1)):
+                # Here, the loss minimum is not captured, but I don't know if I can really do anything about it
+                # I think the best course of action would be to assume that the fill pattern is perfectly centred
+                # That way, the determination is at best window_centre/2 cycles out, not otherwise at max window_centre cycles.
+                dividing_line = SUM_DEC//2
 
-        # case (3): Empty buckets are on the right:
-        elif (adc_cycle_at_loss_min > 150*cycles_per_bucket):
-            # see notes above
-            dividing_line: int = int(150*cycles_per_bucket)
+            # case (1): centred fill pattern
+            elif (adc_cycle_at_loss_min <= 30*cycles_per_bucket) or (adc_cycle_at_loss_min >= 330*cycles_per_bucket):
+                # dividing line is the centre of the fill pattern = loss min phase flipped pi/2
+                dividing_line: int = int(np.abs(adc_cycle_at_loss_min - 180*cycles_per_bucket))
+            
+            # case (2): Empty buckets are on the left: 
+            elif (adc_cycle_at_loss_min <= 150*cycles_per_bucket):
+                # see notes above
+                dividing_line: int = int(210*cycles_per_bucket)
 
+            # case (3): Empty buckets are on the right:
+            elif (adc_cycle_at_loss_min > 150*cycles_per_bucket):
+                # see notes above
+                dividing_line: int = int(150*cycles_per_bucket)
+            
+        elif method == "integrated_half":
+            print("# --- Mode: integrated half --- #")
+            # integrate loss
+            integrated_loss = np.sum(replicated_fill_pattern[f"{sector}B"][:,1])
+            cumulative_loss = np.cumsum(replicated_fill_pattern[f"{sector}B"][:,1])
+            
+            # weighted left half
+            dividing_line = np.where(cumulative_loss < integrated_loss//2)[0].tolist()[-1]
+        
         else:
-            dividing_line = 0
-            raise ArithmeticError("Issue calculating adc_windows. See function \"calculate_adc_counter_windows()\".")
+            ValueError("Incorred mode.")
 
+        # --- calculations 
         # format: [offset_1, window_1, offset_2, window_2]
-        calculated_adc_counter_windows = [0, dividing_line, dividing_line, (86 - dividing_line)]
+        calculated_adc_counter_windows = [0, dividing_line, dividing_line, (SUM_DEC - dividing_line)]
+        bucket_offset_1, bucket_window_1, bucket_offset_2, bucket_window_2 = [int(buckets_per_cycle*adc_cycle) for adc_cycle in calculated_adc_counter_windows]
 
-        depolarised_bunches = f"0:{int(dividing_line*buckets_per_cycle)}"
+        # FPM_Y minimum
+        FPM_Y_minimum_bucket = int(buckets[np.where(FPM_Y_original == np.min(FPM_Y_original))[0].tolist()[0]])
+        print(f"FPM_Y min bucket = {FPM_Y_minimum_bucket}")
+
+        bucket_offset_1 += int(FPM_Y_minimum_bucket - bucket_at_loss_min)
+        bucket_offset_2 += int(FPM_Y_minimum_bucket - bucket_at_loss_min)
+        # After aligning the empty buckets, are the starts of the windows within 1:360?
+        # If not, loop in circular buffer.
+        if (bucket_offset_1 < 1) or (bucket_offset_1 > 360):
+            bucket_offset_1 = (bucket_offset_1 - 1) % 360 + 1
+        if (bucket_offset_2 < 1) or (bucket_offset_2 > 360):
+            bucket_offset_2 = (bucket_offset_2 - 1) % 360 + 1
+
+        # The start of one window is the end of the other.
+        depolarised_bunch_start = bucket_offset_1
+        depolarised_bunch_end 	= bucket_offset_2-1
+        depolarised_bunches = f"{depolarised_bunch_start}:{depolarised_bunch_end}"
 
         print("Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]")
         print(calculated_adc_counter_windows)
@@ -371,9 +440,8 @@ def calculate_adc_counter_windows(sector: str) -> tuple[list[int], str]:
 
     except Exception:
         logging.error(traceback.format_exc())
-    
 
-    return calculated_adc_counter_windows, depolarised_bunches
+    return None
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -401,15 +469,16 @@ def save_data() -> None:
         with open(os.path.join(data_path, "replicated_fill_pattern.json"), "w") as f:
             json.dump(replicated_fill_pattern_JSON, f)
 
-        # --- backup, store each np.array as text with filename as key. 
-        # Probably keep these in their own folder
-        # for key in replicated_fill_pattern:
-        #     np.savetxt(os.path.join(data_path, "individual_loss_files", f"{key}.txt"), replicated_fill_pattern[key], delimiter=',')
-
         # --- raw beamloss without binning?
         # beam losses, as .json:
-        with open(os.path.join(data_path, 'beam_losses.json'), 'w') as f:
+        with open(os.path.join(data_path, "beam_losses.json"), "w") as f:
             json.dump(beam_losses, f)
+
+        # --- FPM_Y
+        if FPM_Y_offset is not None:
+            with open(os.path.join(data_path, "FPM_Y.txt"), "w") as f:
+                for value in FPM_Y_offset:
+                    f.write(str(value) + '\n')
 
         print("Data saved!")
 
@@ -419,62 +488,163 @@ def save_data() -> None:
 
     return None
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------
-#
+# -------------------------------------------------------------------------------------------------------------------------------
+# Plot data
 def plot_data(sectors: Literal["all", "11"]) -> None:
-    """
-    Plots replicated_fill_pattern (average beam loss per ADC cycle) for all sectors just sector 11. 
-    """
-    try:
-        
-        print("Plotting data...")
 
-        if sectors == "11":
-            # Straight on top, bend on bottom            
-            fig, axs = plt.subplots(2,1, figsize=(4,6), constrained_layout=True)
+	# original non-reversed settings are correct in refernce to the 
+	# direction in which the buckets are shifted with the bucket_shift_Y
+	# positive number means the fill pattern moves left with respect to the
+	# revolution window.
 
-            axs[0].plot(replicated_fill_pattern["11A"][:,0], replicated_fill_pattern["11A"][:,1], marker='o')
-            axs[1].plot(replicated_fill_pattern["11B"][:,0], replicated_fill_pattern["11B"][:,1], marker='o')
+	global FPM_Y_offset
 
-            axs[0].set_title("Replicated Fill Pattern\n11 A (straight)")
-            axs[1].set_title(f"11 B (bend)\nwindow={set_adc_window}")
+	try: 
+		# depolarised bunches
+		offset_1, window_1, offset_2, window_2 = calculated_adc_counter_windows
 
-            for i in range(2):
-                axs[i].set_xlabel("ADC cycle")
-                axs[i].set_ylabel("Average beam loss")
+		# plot FPM
+		fig, axs = plt.subplots(1,2, figsize=(6,3), constrained_layout=True)
+		axs[0].plot(buckets, FPM_Y_offset, marker='o')
+		axs[0].set_xlim([1,360])
+		axs[0].set_xticks([1, 60, 120, 180, 240, 300, 360])
+		axs[0].set_title("FPM_Y offset")
+		axs[0].set_xlabel("Bunch number")
 
-            plt.savefig(os.path.join(data_path, "BLM_fill_pattern_sector_11.png"),  dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+		axs[1].plot(buckets, FPM_Y_original, marker='o')
+		axs[1].set_xlim([1,360])
+		axs[1].set_xticks([1, 60, 120, 180, 240, 300, 360])
+		axs[1].set_title("FPM_Y original")
+		axs[1].set_xlabel("Bunch number")
 
-            plt.show()
+		# fill between
+		if (depolarised_bunch_start < depolarised_bunch_end):
+			# 1 to start
+			axs[1].fill_between(
+				x=buckets[0:depolarised_bunch_start], 
+				y1=FPM_Y_original[0:depolarised_bunch_start], 
+				y2=np.min(FPM_Y_original), 
+				alpha=0.2, 
+				color="blue")
+			# start to end
+			axs[1].fill_between(
+				x=buckets[depolarised_bunch_start:depolarised_bunch_end], 
+				y1=FPM_Y_original[depolarised_bunch_start:depolarised_bunch_end], 
+				y2=np.min(FPM_Y_original), 
+				alpha=0.2, 
+				color="red")
+			# end to 360
+			axs[1].fill_between(
+				x=buckets[depolarised_bunch_end:359], 
+				y1=FPM_Y_original[depolarised_bunch_end:359], 
+				y2=np.min(FPM_Y_original), 
+				alpha=0.2, 
+				color="blue")
+		elif (depolarised_bunch_start > depolarised_bunch_end):
+			# 1 to end
+			axs[1].fill_between(
+				x=buckets[0:depolarised_bunch_end], 
+				y1=FPM_Y_original[0:depolarised_bunch_end], 
+				y2=np.min(FPM_Y_original), 
+				alpha=0.2, 
+				color="blue")
+			# end to start
+			axs[1].fill_between(
+				x=buckets[depolarised_bunch_end:depolarised_bunch_start], 
+				y1=FPM_Y_original[depolarised_bunch_end:depolarised_bunch_start], 
+				y2=np.min(FPM_Y_original), 
+				alpha=0.2, 
+				color="red")
+			# start to 360
+			axs[1].fill_between(
+				x=buckets[depolarised_bunch_start:359], 
+				y1=FPM_Y_original[depolarised_bunch_start:359], 
+				y2=np.min(FPM_Y_original), 
+				alpha=0.2, 
+				color="blue")
+
+		
+		if sectors == "11":
+
+			print("Plotting data...")
+
+			straight 	= np.array(replicated_fill_pattern["11A"])
+			bend 		= np.array(replicated_fill_pattern["11B"])
+
+			# Straight on top, bend on bottom
+			fig, axs = plt.subplots(2,2, figsize=(6,6), constrained_layout=True)
+
+			# plot raw data
+			sigma = 0.1
+			axs[0,0].plot(gaussian_filter1d(beam_losses["11A"], sigma), marker='o', color='orange')
+			axs[1,0].plot(gaussian_filter1d(beam_losses["11B"], sigma), marker='o', color='orange')
+
+			axs[0,0].set_title("Raw 11A")
+			axs[1,0].set_title("Raw 11B")
 
 
-        elif sectors == "all":
-            # create a new figure (window) for each sector. This is 14 plots...
-            for sector in range(1,14+1,1):
-                # Straight on top, bend on bottom
-                fig, axs = plt.subplots(2,1, figsize=(4,6), constrained_layout=True)
-                
-                axs[0].plot(replicated_fill_pattern[f"{sector}A"][:,0], replicated_fill_pattern[f"{sector}A"][:,1], marker='o')
-                axs[1].plot(replicated_fill_pattern[f"{sector}B"][:,0], replicated_fill_pattern[f"{sector}B"][:,1], marker='o')
+			axs[0,1].plot(straight[:,0], straight[:,1], marker='o')
+			axs[1,1].plot(bend[:,0], bend[:,1], marker='o')
 
-                axs[0].set_title(f"Replicated Fill Pattern\n{sector} A (straight)")
-                axs[1].set_title(f"{sector} B (bend)\nwindow={set_adc_window}")
 
-                for i in range(2):
-                    axs[i].set_xlabel("ADC cycle")
-                    axs[i].set_ylabel("Average beam loss")
+			# fill between
+			axs[0,1].fill_between(x=straight[0:offset_2+1,0], y1=straight[0:offset_2+1,1], y2=np.min(straight[:,1]), alpha=0.2, color="red")
+			axs[0,1].fill_between(x=straight[offset_2:-1,0], y1=straight[offset_2:-1,1], y2=np.min(straight[:,1]), alpha=0.2, color="blue")
+			axs[1,1].fill_between(x=bend[0:offset_2+1,0], y1=bend[0:offset_2+1,1], y2=np.min(bend[:,1]), alpha=0.2, color="red")
+			axs[1,1].fill_between(x=bend[offset_2:-1,0], y1=bend[offset_2:-1,1], y2=np.min(bend[:,1]), alpha=0.2, color="blue")
+	
 
-                plt.savefig(os.path.join(data_path, f"BLM_fill_pattern_sector_{sector}.png"),  dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+			axs[0,1].set_title("Replicated Fill Pattern\n11 A (straight)")
+			axs[1,1].set_title("11 B (bend)")
 
-            plt.show()
+			for i in range(2):
+				axs[i,1].set_xlabel("ADC cycle")
+				axs[i,1].set_ylabel("Average beam loss")
 
-        print("Data plotted!")
+			# plt.savefig(os.path.join(data_path, "BLM_fill_pattern_sector_11.png"),  dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+			print("Data plotted!")
 
-    except Exception:
-		# Logs the error appropriately. 
-        logging.error(traceback.format_exc())
+			plt.show()
 
-    return None
+		elif sectors == "all":
+			# create a new figure for each sector.
+			for sector in range(1, 14+1, 1):
+
+				# Straight on top, bend on bottom
+				fig, axs = plt.subplots(2, 2, figsize=(6,6), constrained_layout=True)
+
+				# plot raw data
+				sigma = 4
+				axs[0,0].plot(gaussian_filter1d(beam_losses[f"{sector}A"], sigma), marker='o', color='orange')
+				axs[1,0].plot(gaussian_filter1d(beam_losses[f"{sector}B"], sigma), marker='o', color='orange')
+
+				axs[0,0].set_title(f"Raw {sector}A")
+				axs[1,0].set_title(f"Raw {sector}B")
+
+
+				straight 	= np.array(replicated_fill_pattern[f"{sector}A"])
+				bend 		= np.array(replicated_fill_pattern[f"{sector}B"])
+
+				axs[0,1].plot(straight[:,0], straight[:,1], marker='o')
+				axs[1,1].plot(bend[:,0], bend[:,1], marker='o')
+
+				axs[0,1].set_title(f"Replicated Fill Pattern\n{sector} A (straight)")
+				axs[1,1].set_title(f"{sector} B (bend)")
+
+				for i in range(2):
+					axs[i,1].set_xlabel("ADC cycle")
+					axs[i,1].set_ylabel("Average beam loss")
+
+			# plt.savefig(os.path.join(data_path, "BLM_fill_pattern_sector_11.png"),  dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+
+			plt.show()
+
+			print("Data plotted!")
+
+	except Exception:
+		logging.error(traceback.format_exc())
+
+	return None
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #

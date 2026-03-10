@@ -1,4 +1,3 @@
-from shutil import ExecError
 from typing import Any, Union, Literal
 import traceback
 import datetime
@@ -68,7 +67,7 @@ class BLMs:
     """
     def __init__(self, ):
         
-        # states
+        # --- states
         self._got_loss_PVs              : bool = False
         self._got_settings_PVs          : bool = False
         self._got_init_settings         : bool = False
@@ -83,7 +82,7 @@ class BLMs:
         # using "flat is better than nested" approach, all dicts have the same keys
         #   of form {sector}{section}, e.g. "6B"
         #   except for the adc_counter_offset|window which are per IOC (so the key is just {sector})
-        # PVs
+        # --- PVs
         self.loss                       : dict[str, Any] = {}
         self.adc_counter_loss_1         : dict[str, Any] = {}
         self.adc_counter_loss_2         : dict[str, Any] = {}
@@ -104,7 +103,7 @@ class BLMs:
         self.t0_interval                : dict[str, Any] = {}
         self.t0_interval_expected       : dict[str, Any] = {}
 
-        # initial values
+        # --- initial values
         self.init_mode                  : Union[str, None] = None
         # NOTE: mode is assigned        : {0: not set, 1: injection, 2: decay, 3: auto}
         self.init_Vgc                   : dict[str, float] = {}
@@ -123,7 +122,7 @@ class BLMs:
         self.init_t0_interval           : dict[str, Union[float, None]] = {}
         self.init_t0_interval_expected  : dict[str, Union[float, None]] = {}
 
-        # default values
+        # --- default values
         self.default_mode                  : Union[str, None] = None
         self.default_Vgc                   : dict[str, float] = {}
         self.default_att                   : dict[str, float] = {}
@@ -136,7 +135,11 @@ class BLMs:
         self.default_sumdec_adc_mask_offset: dict[str, Union[float, None]] = {}
         self.default_sumdec_adc_mask_window: dict[str, Union[float, None]] = {}
 
-        # wait time between PV calls / assignments to not flood system
+        # paths
+        self.current_path: str = os.getcwd()
+        self.parent_path : str = os.path.dirname(self.current_path)
+
+        # --- wait time between PV calls / assignments to not flood system
         self.__wait_time = 0.1
 
     #
@@ -230,6 +233,48 @@ class BLMs:
         return self.init_adc_counter_offset_1, self.init_adc_counter_window_1, self.init_adc_counter_offset_2, self.init_adc_counter_window_2, self.init_counting_mode, self.init_threshold_count_diff
     #
     # ----------------------------------------------------------------------------------------------------------
+    def apply_adc_counter_masks(self, offset_1: int, window_1: int, offset_2: int, window_2: int, counting_mode=0) -> None:
+        """
+        Apply passed adc_counter_mask values across all BLMs. Default counting mode to integrated (0).
+
+        Parameters
+        ----------
+        offset_1: int
+            ADC counter offset, such that offset_1 + window_1 <= SUM_DEC (86)
+        window_1: int
+            ADC counter window, such that offset_1 + window_1 <= SUM_DEC (86)
+        offset_2: int
+            ADC counter offset, such that offset_2 + window_2 <= SUM_DEC (86)
+        window_2: int
+            ADC counter window, such that offset_2 + window_2 <= SUM_DEC (86)
+        counting_mode: Literal[0, 1]
+            Loss count mode for (specifically) the ADC counter masks. \\
+            0: differential, 1: normal (thresholding)
+        """
+        print("Applying ADC counter masks...")
+		# apply liberaBLM ADC windows
+        for key in self.adc_counter_window_1:
+            self.adc_counter_offset_1[key].put(offset_1, use_complete=True)
+            self.adc_counter_window_1[key].put(window_1, use_complete=True)
+            self.adc_counter_offset_2[key].put(offset_2, use_complete=True)
+            self.adc_counter_window_2[key].put(window_2, use_complete=True)
+            self.counting_mode[key].put(counting_mode, use_complete=True)
+		# wait for puts to complete
+        for key in self.adc_counter_offset_1:
+            while not all(
+				[self.adc_counter_offset_1[key].put_complete,
+				 self.adc_counter_window_1[key].put_complete,
+				 self.adc_counter_offset_2[key].put_complete,
+				 self.adc_counter_window_2[key].put_complete,
+				 self.counting_mode[key].put_complete]
+			):
+                time.sleep(0.01)
+       
+        print("ADC counter masks applied!")
+
+        return None
+    #
+    # ----------------------------------------------------------------------------------------------------------
     def get_sumdec_adc_mask_PVs(self, ) -> tuple[dict[str, Any],...]:
         """
         Loads all adc masks for SUM_DEC buffer (offset + window) PVs from all sectors and returns dictionaries (of PVs) \\
@@ -276,7 +321,6 @@ class BLMs:
         self._got_init_sumdec_adc_masks = True
 
         return self.init_sumdec_adc_mask_offset, self.init_sumdec_adc_mask_window
-
     #
     # ----------------------------------------------------------------------------------------------------------
     def get_decimation(self,) -> Union[tuple[dict[str, Any], ...], None]:
@@ -346,7 +390,7 @@ class BLMs:
             value_was_updated[key] = False 
             if self.init_t0_interval[key] != self.init_t0_interval_expected[key]:
                 value_was_updated[key] = True
-                PV.put(self.init_t0_interval_expected, use_complete=True)
+                PV.put(self.init_t0_interval_expected[key], use_complete=True)
 
         # wait for puts to complete
         for key, PV in self.t0_interval.items():
@@ -534,13 +578,13 @@ class BLMs:
                 self.threshold_count_diff[key].put(self.init_threshold_count_diff[key], use_complete=True)
             # wait for all puts to complete
             for key in self.adc_counter_offset_1:
-                while not all(
-                    [self.adc_counter_offset_1[key].put_complete, 
+                while not all([
+                    self.adc_counter_offset_1[key].put_complete, 
                     self.adc_counter_window_1[key].put_complete,
                     self.adc_counter_offset_2[key].put_complete,
                     self.adc_counter_window_2[key].put_complete,
-                    self.counting_mode[key].put_complete]
-                ):
+                    self.counting_mode[key].put_complete
+                ]):
                     time.sleep(self.__wait_time)
             for key in self.threshold_count_diff:
                 while not self.threshold_count_diff[key].put_complete:

@@ -12,19 +12,23 @@ Beam energy diagnostic tool using resonant depolarisation at the Australian Sync
 
 ## Installation
 
-Clone this repo 
+1. Clone this repo 
 `git clone https://bitbucket.synchrotron.org.au/scm/~watsonl/resdep.git`
-or navigate to
-`//assan03.beamline.synchrotron.org.au/opdata/usr/personal/watsonl/resdep`
+2. Navigate to the repo root durectory
+3. Install with `pip` or `uv`
+`pip install .`
+OR
+`uv pip install -e .`
 
 ## Usage
 
-Right now, the script is run manually on the OPIs. Later, the intention is to build in EPICS GUI functionality (and hopefully plotting in real-time).
-
 **run** 
-`ipython3 resdep.py`
-OR -- for ops
-`ipython3 resdep_ops.py`
+In `python`:
+`from resdep import resdepGUI`
+`resdepGUI.spawn()`
+
+Without `pip`, running as a script from the repo root:
+`ipython3 -m resdep.resdepGUI`
 
 ## Description
 

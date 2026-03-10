@@ -1,630 +1,1166 @@
-from shutil import ExecError
 from typing import Union, Any
+import logging
+import traceback
 import epics
 import time
 import datetime
 import os
 import json
-import csv
-import warnings
-import sys
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt 
+from scipy.ndimage import gaussian_filter1d
+from scipy import optimize
+from functools import partial
 
-# from alignBLMtoFillPattern import alignFillPattern
-from epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions  
-from epicsScrapers import Scraper
+from resdep.epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions
+from resdep._calculations import energy_calc, freq_calc, model
+from resdep._progressBars import printProgressBar
 
-# --- Constants
-# * Fractional spin tune
-v_s 		: float = 0.833 				# 6.833
-v_s303GeV 	: float = 0.876 				# 6.876, based on if the beam energy is 3.03 GeV 
-# End User Run Machine Parameters (2025-09-28)
-v_x 	: float = 0.289148 				# 13.29
-v_y 	: float = 0.21626 				# 5.219
-#
-f_rev 	: float = 1.38799e3 			# kHz
-g 		: float = 2.0023193043609236
-a_g 	: float = (g - 2)/2
-m_e 	: float = 9.109383713928e-31 	# kg
-c 		: float = 299792458				# m/s
-e 		: float = 1.602176634e-19		# C
-
-# --- exp variables
-direction 			: str 	= 'Y'		# 'X' or 'Y'
-tune 				: float = v_s303GeV # v_s, v_x, or v_y (... or v_s303GeV)
-harmonic 			: int 	= 0			# int >= 0
-bounds 				: float = 0.05/100	# input %, output decimal
-set_kicker_amp 		: float = 0 		# % (0-1)
-set_drive_pattern 	: str 	= '!'		# 'start:stop' or '!' for all. Start at '1' not '0'
-set_sweep_span 		: float = 0			# kHz
-set_sweep_period 	: float = 0 		# us
-sweep_rate 			: float = 10		# Hz/s
-sweep_step_size 	: float = 0.5 		# Hz - minimum allowable = 0.5
-# --- Scrapers
-set_scraper_upper	: float  = 21.50 	# mm, Default = 20.35, set = 22.00
-set_scraper_lower	: float  = 14.20 	# mm, Default = 14.20, set = ???
-set_scraper_inner	: float  = 33.50 	# mm, Default = 24.01, set = 34.50
-
-# --- ADC counter masks
-# TODO: Update the documentation on Confluence
-
-response = input("Run BLM fill pattern alignment? (y/n)?").strip().lower()
-if response == "y":
-	
-	# calculated_adc_counter_windows, depolarised_bunches = alignFillPattern()
-	
-	# (set_adc_counter_offset_1, 
-  	#  set_adc_counter_window_1, 
-  	#  set_adc_counter_offset_2, 
-  	#  set_adc_counter_window_2) = calculated_adc_counter_windows
-	
-	# set_drive_pattern = depolarised_bunches
-
-	raise ExecError("Fill pattern alignment is not callable (yet, sorry).\nRun alignBLMtoFillPattern.py in a separate window and config resdep based on the output.")
-
-	pass
-
-else:
-	set_adc_counter_offset_1: int = 0
-	set_adc_counter_window_1: int = 8
-	set_adc_counter_offset_2: int = 8
-	set_adc_counter_window_2: int = 8
-
-
-# --- input handling
-if direction not in ['X', 'Y', 'Z']:
-	raise ValueError("direction must be one of 'X', 'Y' or 'Z'.")
-if tune >= 1:
-	raise ValueError("tune must be a fractional value.")
-if not isinstance(harmonic, int) or harmonic < 0:
-	raise ValueError("harmonic must be a positive integer.")
-if not 0 <= set_kicker_amp <= 1:
-	raise ValueError('set_kicker_amp must be between 0 and 1.')
-if not isinstance(set_drive_pattern, str):
-	raise TypeError(
-		"set_drive_pattern must be a string of format 'start:stop' or '!' meaning all bunches.\n"
-		+ "See Section 5.3 of the iGp12 manual:" 
-		+ "https://confluence.synchrotron.org.au/confluence/display/AP/BBB+Feedback?preview=/405733507/405733502/iGp12.pdf#BBBFeedback-TechnicalManual.1"
-	)
-if set_sweep_span < 0:
-	raise ValueError('set_sweep_span must be greater than or equal to 0 Hz.')
-if sweep_rate <= 0:
-	raise ValueError("sweep_rate must be positive and non-zero.")
-if sweep_rate > 10:
-	warnings.warn("sweep_rate exceeds 10 Hz/s - the dwell time might be too short to effectively depolarise.")
-	response = input("Do you want to continue? (y/n): ").strip().lower()
-	if not response == 'y':
-		sys.exit()
-if sweep_step_size < 0.5:
-	raise ValueError("sweep_step_size must be larger than 0.5 Hz.")
-
-# Grab masterRF from EPICS
-# if disconnected, .get() will return none and f_rev with throw exception
-masterRF = epics.pv.get_pv('SR00MOS01:FREQUENCY_MONITOR', connect=True)
-masterRFact: Union[float, None] = masterRF.get(timeout=5)			# Hz
-try:
-	f_rev: float = 1e-3 * masterRFact/360 	# kHz # pyright: ignore[reportOperatorIssue] 
-except TypeError: # ^ masterRFact might be None
-	print("Could not grab master RF from EPICS (weird?). Using default f_rev")
-
-# --- calcs
-intrinsic_res_freq 	: float = f_rev * (tune + 0)							# 0th order, kHz
-res_freq		   	: float = f_rev * (tune + harmonic)						# harmoinc order, kHz
-if tune in [v_s, v_s303GeV]:
-	expected_energy 		: float 		= (tune+6) * m_e * c**2 / (a_g * e)		# eV
-	expected_energy_bounds 	: float 		= expected_energy * bounds				# eV
-	expected_energy_limits 	: list[float] 	= [expected_energy-expected_energy_bounds, expected_energy+expected_energy_bounds] # eV
-	freq_bounds				: float			= f_rev*((tune+6)*bounds)				# kHz
-else:
-	freq_bounds 			: float 		= intrinsic_res_freq * bounds			# kHz
-sweep_limits 	: list[float] 	= [res_freq-freq_bounds, res_freq+freq_bounds] 	# kHz
-set_sweep_freq 	: float 		= sweep_limits[0] 								# sweep start, kHz
-sweep_range 	: float 		= freq_bounds*2									# kHz
-sweep_steps 	: float 		= int(sweep_range*1e3//sweep_step_size) 
-sweep_time 		: float 		= sweep_range*1e3/sweep_rate 					# s
-dwell_time 		: float 		= sweep_step_size / sweep_rate 					# s
-print('Estimated sweep time {0}'.format(time.strftime('%H:%M"%S', time.gmtime(sweep_time))))
-
-response = input("Run the experiment? (y/n): ").strip().lower()
-if not response == 'y':
-	sys.exit()
-
-# --------------------------------------------------------------------------------------------------------------------
-# --- assign PVs : BLMs 
-blm = BLMs()
-blm.get_loss_PVs()
-blm.get_adc_counter_mask_PVs()
-time.sleep(2) # give all the PVs a sec to catch up
-blm.get_init_adc_counter_masks()
-time.sleep(2) # give all the PVs a sec to catch up
-blm.get_decimation()
-time.sleep(2) # give all the PVs a sec to catch up
-# blm.inits_to_json(mode='adc_counter_masks')
-
-# --- assign PVs : drive
-sweep_freq_act 	= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:FREQ_ACT', connect=True)
-sweep_freq 		= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:FREQ', connect=True)
-sweep_span 		= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:SPAN', connect=True)
-sweep_period 	= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:PERIOD', connect=True)
-kicker_amp 		= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:AMPL', connect=True)
-pattern 		= epics.pv.get_pv(f'IGPF:{direction}:DRIVE:PATTERN', connect=True)
-
-# --- assign PVs: current
-dcct = epics.pv.get_pv('SR11BCM01:CURRENT_MONITOR', connect=True)
-
-# --- assign PVs: scrapers (up, down, left, right)
-upper_scraper = Scraper(direction="UPPER")
-upper_scraper.connect()
-
-# --- assign PVs: ODB beam size and position
-ODB_PVs: dict[str, Any] = {}
-ODB_PVs["X_size"] 		= epics.pv.get_pv("SR10BM02IMG01:X_SIZE_MONITOR", connect=True)
-ODB_PVs["X_offset"] 	= epics.pv.get_pv("SR10BM02IMG01:X_OFFSET_MONITOR", connect=True)
-ODB_PVs["Y_size"] 		= epics.pv.get_pv("SR10BM02IMG01:Y_SIZE_MONITOR", connect=True)
-ODB_PVs["Y_offset"] 	= epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)
-
-# --- init save path (format: Data\YYYY-mm-dd\HHMM+'h'\) e.g. 'Data\2025-09-25\0900h\'
-start_time 	= datetime.datetime.now()
-date_str 	= start_time.strftime("%Y-%m-%d")
-hours_str 	= start_time.strftime("%H%Mh")
-seconds_str = start_time.strftime("%Ss")
-try:
-	os.makedirs(os.path.join("Data", date_str, hours_str), exist_ok=False)
-	data_path = os.path.join("Data", date_str, hours_str)
-except OSError: 
-	# if you run the script again in the same minute, it appends seconds to the path name
-	os.makedirs(os.path.join("Data", date_str, hours_str, seconds_str))
-	data_path = os.path.join("Data", date_str, hours_str, seconds_str)
-
-# --- init save vectors
-freqs				: list[Union[float, None]] = []
-current				: list[Union[float, None]] = []
-timestamps_datetime	: list[datetime.datetime] = []
-timestamps_str		: list[str] = []
-beam_losses			: dict[str, list[float]] = {}
-beam_loss_window_1 	: dict[str, list[float]] = {}
-beam_loss_window_2 	: dict[str, list[float]] = {}
-for key in blm.loss:
-	beam_losses[key] = []
-	beam_loss_window_1[key] = []
-	beam_loss_window_2[key] = []
-ODB_data : dict[str, list[float]] = {}
-for key in ODB_PVs:
-	ODB_data[key] = []
-projected_end_time: datetime.datetime = start_time + datetime.timedelta(seconds=sweep_time)
-metadata: dict[str, Any] = {
-	"direction": direction, 
-	"duration": time.strftime('%H:%M:%S', time.gmtime(sweep_time)), 
-	"fractional tune": tune,
-	"f_rev": f_rev,
-	"bounds (%)": bounds, 
-	"frequency bounds (kHz)": freq_bounds, 
-	"harmonic": harmonic, 
-	"sweep limits (kHz)": sweep_limits, 
-	"kicker amp (%)": set_kicker_amp, 
-	"drive pattern": set_drive_pattern, 
-	"sweep rate (Hz/s)": sweep_rate, 
-	"sweep step size (Hz)": sweep_step_size, 
-	"sweep span (kHz)": set_sweep_span, 
-	"sweep period (us)": set_sweep_period, 
-	"scraper UPPER init pos": upper_scraper.init_pos,
-	"scraper UPPER set pos" : set_scraper_upper,
-	"start time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
-	"projected end time": projected_end_time.strftime("%Y-%m-%d %H:%M:%S")
-}
-
-# --------------------------------------------------------------------------------------------------------------------
-#
-def main():
+class ResonantDepolarisation():
 	"""
-	Resonant depolarisation experiment, uses kicker to depolarise bunches, and measures the corresponding beam loss.
-	
-	Workflow
-	--------
-	- Initialises kicker (drive) panel with set amplitude and frequency
-	- Slowly steps through the requested energy (frequency) range 
-	...(typically at 10 Hz/s, physically updates drive frequency in 0.5 Hz steps)
-	- Reads the beam loss for every monitor and drive frequency (readback at 20 Hz)
-	- Updates progress to stdout every n_minutes
-	- Turns off kicker drive and resets BLM gain voltages and attenuations, scrapers
-	...saves and plots data on experiment end or KeyboardInterrupt
+	Resdep class that holds its own objects (constants, calculation, data) \\
+	and member functions that run and plot the data.
 
-	To be implemented
-	-----------------
-	- Changing the adc_counts_offset and _window to record beam loss on the polarised and 
-	...depolarised parts of the beam separately
-	- The ratio of the depolarised/polarised beam losses will then normalise out spurrious depolarisation events,
-	...e.g. ID gap changes, magnet instabilities, etc.
-
+	Is written to (optionally) take in additional Qt callback functionality, but is not required.
 	"""
-	print('\nBeginning Resonant Depolarisation experiment! Metadata:...')
-	for key, value in metadata.items():
-		print(f"{key}: {value}")
 
-	try:
-		# init start time
-		log_frequency	: float = 10			# Hz
-		last_log_call	: float = time.time()
-		last_update_call: float = time.time()
-		n_minutes		: int 	= 5
-
-		# for all libera units with incorrect t0_decimation, correct:
-		for key in blm.t0_interval:
-			if blm.init_t0_interval[key] != blm.init_t0_interval_expected[key]:
-				blm.t0_interval[key].put(blm.init_t0_interval_expected[key], use_complete=True)
-				# wait for put to complete
-				while not blm.t0_interval[key].put_complete:
-					time.sleep(0.1)
-
-		# init liberaBLM ADC windows
-		for key in blm.adc_counter_offset_1:
-			blm.adc_counter_offset_1[key].put(set_adc_counter_offset_1, use_complete=True)
-			blm.adc_counter_window_1[key].put(set_adc_counter_window_1, use_complete=True)
-			blm.adc_counter_offset_2[key].put(set_adc_counter_offset_2, use_complete=True)
-			blm.adc_counter_window_2[key].put(set_adc_counter_window_2, use_complete=True)
-		# wait for puts to complete
-		for key in blm.adc_counter_offset_1:
-			while not all(
-				[blm.adc_counter_offset_1[key].put_complete,
-				 blm.adc_counter_window_1[key].put_complete,
-				 blm.adc_counter_offset_2[key].put_complete,
-				 blm.adc_counter_window_2[key].put_complete]
-			):
-				time.sleep(0.1)
-
-		# init scrapers (put in)
-		# Do each scraper individually, a bit safer
-		upper_scraper.move(position=set_scraper_upper)
-
-		# init kicker drive
-		sweep_span.put(set_sweep_span) 		# kHz
-		sweep_period.put(set_sweep_period)	# us
-		pattern.put(set_drive_pattern)
-		set_sweep_freq = sweep_limits[0] 	# kHz
-		kicker_amp.put(set_kicker_amp)		# %
-
-		# --- Sweep frequency by stepping through kicker drive frequency setpoint in loop
-		while set_sweep_freq < (sweep_limits[-1] + sweep_step_size):
-			sweep_freq.put(set_sweep_freq)			# kHz
-			set_sweep_freq += sweep_step_size*1e-3 	# kHz
-			time.sleep(dwell_time) # propto sweep rate with frequency step
-
-			# --- Call log_data() at 1 Hz 
-			if (time.time() - last_log_call) >= 1/log_frequency:
-				# ? Later implementation -- turn off kicker for 1s before data collection to damp driven betatron oscillations
-				# NOTE this doubles experiment time and will have to be updated in the metadata / print statement
-				# kicker_amp.put(0)
-				# time.sleep(1)
-				log_data()
-				last_log_call = time.time()
-				# kicker_amp.put(set_kicker_amp)
-
-			# --- Send progress update to the user every n minutes:
-			if (time.time() - last_update_call) >= (n_minutes * 60):
-				time_elapsed: datetime.timedelta = datetime.datetime.now() - start_time
-				progress_update(time_elapsed)
-				last_update_call = time.time()
-
-	except KeyboardInterrupt:
-		print("\nInterrupted! Kicker amp => OFF, BLM settings => restored, move scrapers back, Saving data...")
+	# variables defined here change across all instances of ResonantDepolarisation.
+	# We only expect one instance at a time
 	
-	finally:
-		# turn off kicker
-		kicker_amp.put(0)
-		# move scrapers back
-		upper_scraper.moveOut()	
-		# restore epicsBLM window settings - change to 'all' for blm settings as well
-		blm.restore_inits(mode="adc_counter_masks")
-		blm.restore_inits(mode="decimation")
-		# cleanup
-		save_data()
-		# plot_all_data()
-		plot_data(data=beam_losses, filename='Loss_all_sectors')
-		plot_data(data=beam_losses, current_normalised=True, filename='Loss_all_sectors_current_normalised')
-		plot_data(data=beam_loss_window_1, filename='Loss_window_1')
-		plot_data(data=beam_loss_window_2, filename='Loss_window_2')
-		print('\nExperiment finished!')
+	# --- Constants
+	g 			: float = 2.0023193043609236
+	a_g 		: float = (g - 2)/2
+	m_e 		: float = 9.109383713928e-31 	# kg
+	c 			: float = 299792458				# m/s
+	e 			: float = 1.602176634e-19		# C
+	# * Fractional spin tune
+	v_s 		: float = 0.833 				# 6.833
+	v_s303GeV 	: float = 0.879 				# 6.879, based on if the beam energy is 3.0311 GeV 
+	# End User Run Machine Parameters (2025-09-28)
+	v_x 		: float = 0.289148 				# 13.29
+	v_y 		: float = 0.21626 				# 5.219
+	v_synch 	: float	= 0.00847				
+
+
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	#
+	def __init__(self, *, progress_callback=None, plot_callback=None, status_callback=None, data_path_callback=None, timer_callback=None) -> None:
 		
-# --------------------------------------------------------------------------------------------------------------------
-#
-# --- PV logger operating at 1 Hz
-def log_data():
-	"""
-	Appends PV values to python lists at log_frequency Hz. \\
-	Stored in memory until save_data() is called.
-	"""
-	timestamp = datetime.datetime.now()
-	timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
-	timestamps_datetime.append(timestamp)
-	timestamps_str.append(timestamp_str)
-	freqs.append(sweep_freq_act.get()) 				# kHz
-	current.append(dcct.get())						# A
-	for key in blm.loss:
-		beam_losses[key].append(blm.loss[key].get())	# Counts
-		beam_loss_window_1[key].append(blm.adc_counter_loss_1[key].get())
-		beam_loss_window_2[key].append(blm.adc_counter_loss_2[key].get())
-	for key in ODB_data:
-		ODB_data[key].append(ODB_PVs[key].get()) # um
+		# --- init callbacks for Qt functionality
+		self.progress_callback = progress_callback or (lambda *args, **kwargs: None)
+		self.plot_callback = plot_callback or (lambda *args, **kwargs: None)
+		self.status_callback = status_callback or (lambda *args, **kwargs: None)
+		self.data_path_callback = data_path_callback or (lambda *args, **kwargs: None)
+		self.timer_callback = timer_callback or (lambda *args, **kwargs: None)
+		self._abort_requested = False
 
-# --------------------------------------------------------------------------------------------------------------------
-#
-# --- send log / print every n minutes as update
-def progress_update(time_elapsed: datetime.timedelta):
-	"""
-	Prints elapsed time, expected experiment run time, and progress (percentage) complete to stdout
+		# --- init states
+		self._injecting: bool = False
 
-	Parameters
-	----------
-	time_elapsed : datetime.timedelta
-		Timedelta between start time and now
-	"""
-	percentage_complete = int(100*time_elapsed.total_seconds()//sweep_time)
-	print("\n{0} elapsed of {1} ({2}%)...".format(str(time_elapsed).split(".")[0], time.strftime('%H:%M:%S', time.gmtime(sweep_time)), percentage_complete))
+		# default f_rev. Will calculate f_rev from masterRF on experiment start 
+		# (so we dont have any epics connection on GUI start)
+		self.f_rev 	: float = 1.38799e3 # kHz
 
+		# --- exp variables
+		self.direction 			: str 	= 'Y'		# 'X' or 'Y'
+		self.tune 				: float = self.v_s303GeV # v_s, or v_s303GeV
+		self.harmonic 			: int 	= 0			# int >= 0
+		self.bounds 			: float = 0.05/100	# input %, output decimal
+		self.freq_shift			: float = 0			# shifting off calculated resonance, KHz
+		self.set_kicker_amp 	: float = 0.0 		# % (0-1)
+		self.set_drive_pattern 	: str 	= "36:215"	# 'start:stop' or '!' for all. Start at '1' not '0'
+		self.sweep_direction	: int	= 1			# forward = 1, backward = -1
+		self.set_sweep_span 	: float = 0			# kHz
+		self.set_sweep_period 	: float = 0 		# us
+		self.sweep_rate 		: float = 5			# Hz/s
+		self.sweep_step_size 	: float = 0.5 		# Hz - minimum allowable = 0.5
+		self.fast_log_frequency	: int 	= 10		# data logging frequency (most variables), Hz
+		self.slow_log_frequency	: int 	= 1			# data logging frequency (currently just ODB), Hz
+		# ADC masks
+		self.set_adc_counter_offset_1: int = 0
+		self.set_adc_counter_window_1: int = 42
+		self.set_adc_counter_offset_2: int = 42
+		self.set_adc_counter_window_2: int = 44
+		# select counting mode; 0: differential, 1: normal (thresholding)
+		self.set_counting_mode		 : int = 0
 
-# --------------------------------------------------------------------------------------------------------------------
-#
-# populate final values and save metadata
-def save_data():
-	"""
-	Saves PV data to text, json and csv files depending on structure \\
-	Also append entime to metadata and saves to json. \\
-	Save path is Data/{YYYY-mm-dd}/{HHHHh}/ \\
-	*e.g.* Data/2025-10-20/0900h/
-	"""
-	del metadata['projected end time']
-	end_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-	metadata.update({'end time': end_time, 'Last sweep frequency': set_sweep_freq})
-	with open(os.path.join(data_path, 'metadata.json'), 'w') as f:
-		json.dump(metadata, f)
+		# initialise some data storage early for GUI plot purposes
+		self.freqs						: list[float] = []
+		self.beam_loss_window_1 		: dict[str, list[float]] = {}
+		self.beam_loss_window_2 		: dict[str, list[float]] = {}
+		self.res_freq 					: float = 1225
+
+		# do calcs
+		self.calculate_range()
+
+		return None
 	
-
-	# freqs as txt
-	with open(os.path.join(data_path, 'freqs.txt'), 'w') as f:
-			for value in freqs:
-				f.write(str(value) + '\n')
+	# *--------------------------------* #
+	# *---------- Experiment ----------* #
+	# *--------------------------------* #
 	
-	# current as txt
-	with open(os.path.join(data_path, 'current.txt'), 'w') as f:
-			for value in current:
-				f.write(str(value) + '\n')
-
-	# timestamps as txt
-	with open(os.path.join(data_path, 'timestamps.txt'), 'w') as f:
-			for value in timestamps_str:
-				f.write(value + '\n')
-
-	# beam losses, as both .json:
-	with open(os.path.join(data_path, 'beam_losses.json'), 'w') as f:
-		json.dump(beam_losses, f)
-
-	# ... and .csv:
-	bl_keys = list(beam_losses.keys())
-	bl_rows = zip(*[beam_losses[key] for key in bl_keys])
-	with open(os.path.join(data_path, 'beam_losses.csv'), "w", newline="") as f:
-		writer = csv.writer(f)
-		writer.writerow(bl_keys)  # headers
-		writer.writerows(bl_rows) # values
-
-	# adc counter loss 1
-	with open(os.path.join(data_path, 'adc_counter_loss_1.json'), 'w') as f:
-		json.dump(beam_loss_window_1, f)
-
-	# adc counter loss 2
-	with open(os.path.join(data_path, 'adc_counter_loss_2.json'), 'w') as f:
-		json.dump(beam_loss_window_2, f)
-
-	# ODB size and offset
-	with open(os.path.join(data_path, 'ODB_data.json'), "w") as f:
-		json.dump(ODB_data, f)
-	
-
-	print("\n Data saved!")
-
-# --------------------------------------------------------------------------------------------------------------------
-#
-# Format energy to freq conversion for plotting
-def energy_calc(freq):
-	return (freq/f_rev - harmonic + 6) * m_e*c**2/(e*a_g*1e9)
-def freq_calc(energy):
-	return f_rev * (energy*1e9*e*a_g/(m_e*c**2) + harmonic - 6)
-
-# --------------------------------------------------------------------------------------------------------------------
-#
-def plot_all_data():
-	"""
-	Plots every BLM against frequency and energy (conversion from frequency, plotted on top axis
-	"""
-	try:
-		# convert to array
-		freqs_array = np.array(freqs)
-
-		# --- plot data
-		fig, axs = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
-
-		# plot normalised data:
-		for index, key in enumerate(beam_losses):
-			# Colour straight, make corresponding arc black
-			if index % 2 == 0:
-				axs[0].plot(freqs_array, beam_losses[key]/np.max(beam_losses[key]) - 0.15*index, '-', label=key)
-			else:
-				axs[0].plot(freqs_array, beam_losses[key]/np.max(beam_losses[key]) - 0.15*index, '-', color='k', label=key)	
-			axs[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-		axs[0].set_title('All sectors')
-		axs[0].set_xlabel('frequency (kHz)')
-
-		second_axis = axs[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-		second_axis.set_xlabel('Energy (GeV)')
-
-		# plot just sector 11 (normalised)
-		axs[1].plot(freqs_array, beam_losses['11A']/np.max(beam_losses['11A']), '-', label='11A')
-		axs[1].plot(freqs_array, beam_losses['11B']/np.max(beam_losses['11B']) + 0.15, '-', label='11B')
-		axs[1].legend(loc='lower right')
-		axs[1].set_title('Sector 11')
-
-		plt.savefig(os.path.join(data_path, "All_sectors_beam_loss.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
-
-
-
-		# --- plot data - current normalised
-		fig2, axs2 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
-
-		# --- normalise to current
-		beam_losses_Inorm = {}
-		for key in beam_losses:
-			beam_losses_Inorm[key] = np.array(beam_losses[key])/(np.array(current)**2)
-
-		# plot normalised data:
-		for index, key in enumerate(beam_losses):
-			# Colour straight, make corresponding arc black
-			if index % 2 == 0:
-				axs2[0].plot(freqs_array, beam_losses_Inorm[key]/np.max(beam_losses_Inorm[key]) - 0.15*index, '-', label=key)
-			else:
-				axs2[0].plot(freqs_array, beam_losses_Inorm[key]/np.max(beam_losses_Inorm[key]) - 0.15*index, '-', color='k', label=key)	
-			axs2[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-		axs2[0].set_title('All sectors (current normalised)')
-
-		second_axis2 = axs2[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-		second_axis2.set_xlabel('Energy (GeV)')
-
-		# plot just sector 11 (normalised)
-		axs2[1].plot(freqs_array, beam_losses_Inorm['11A']/np.max(beam_losses_Inorm['11A']), '-', label='11A')
-		axs2[1].plot(freqs_array, beam_losses_Inorm['11B']/np.max(beam_losses_Inorm['11B']) + 0.15, '-', label='11B')
-		axs2[1].legend(loc='lower right')
-		axs2[1].set_title('Sector 11 (current normalised)')
-
-		plt.savefig(os.path.join(data_path, "current_normalised_all_sectors_beam_loss.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
-
-		plt.show()
-
-
-		# ----------------------------------- #
-		# ------	ADC counter loss 	----- #
-		# ----------------------------------- #
-		#
-
-		# --- plot data
-		fig3, axs3 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
-
-		# plot normalised data:
-		for index, key in enumerate(beam_loss_window_1):
-			# Colour straight, make corresponding arc black
-			if index % 2 == 0:
-				axs3[0].plot(freqs_array, beam_loss_window_1[key]/np.max(beam_loss_window_1[key]) - 0.15*index, '-', label=key)
-			else:
-				axs3[0].plot(freqs_array, beam_loss_window_1[key]/np.max(beam_loss_window_1[key]) - 0.15*index, '-', color='k', label=key)	
-			axs3[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-		axs3[0].set_title('ADC counter loss 1 - All sectors')
-		axs3[0].set_xlabel('frequency (kHz)')
-
-		# Create energy top axis
-		second_axis = axs3[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-		second_axis.set_xlabel('Energy (GeV)')
-
-		# plot just sector 11 (normalised)
-		axs3[1].plot(freqs_array, beam_loss_window_1['11A']/np.max(beam_loss_window_1['11A']), '-', label='11A')
-		axs3[1].plot(freqs_array, beam_loss_window_1['11B']/np.max(beam_loss_window_1['11B']) + 0.15, '-', label='11B')
-		axs3[1].legend(loc='lower right')
-		axs3[1].set_title('Sector 11')
-
-		plt.savefig(os.path.join(data_path, "ADC_counter_loss_1.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def start_experiment(self, ) -> None:
+		"""
+		Resonant depolarisation experiment, uses kicker to depolarise bunches, and measures the corresponding beam loss.
 		
+		Workflow
+		--------
+		- Initialises kicker (drive) panel with set amplitude and frequency
+		- Slowly steps through the requested energy (frequency) range \\
+		...(typically at 10 Hz/s, physically updates drive frequency in 0.5 Hz steps)
+		- Configures the adc_counts_offset and _window to record beam loss on the polarised and \\
+		...depolarised parts of the beam separately
+		- The ratio of the depolarised/polarised beam losses will then normalise out spurrious depolarisation events, \\
+		...e.g. ID gap changes, magnet instabilities, etc.
+		- Reads the beam loss for every monitor and drive frequency (readback at 20 Hz)
+		- Employs progress bar in std.out for live updates (1 Hz)
+		- Turns off kicker drive and resets BLM gain voltages and attenuations, scrapers \\
+		...saves and plots data on experiment end or KeyboardInterrupt
+
+		To be implemented
+		-----------------
+
+		"""
+
+		try:
+			if self.status_callback:
+				self.status_callback("Status: Setting up PVs...")
+			# --- start-up
+			self.calcf_revfromMasterRF()
+			self.calculate_range()
+			self.load_PVs()
+			self.config_save_files()
+
+			# --- update decimation
+			self.blm.apply_full_decimation()
+			
+			# --- apply masks
+			self.blm.apply_adc_counter_masks(
+				offset_1=self.set_adc_counter_offset_1, 
+				window_1=self.set_adc_counter_window_1,
+				offset_2=self.set_adc_counter_offset_2, 
+				window_2=self.set_adc_counter_window_2,
+				counting_mode=self.set_counting_mode
+			)
+
+			# init kicker drive
+			self.sweep_freq.put(self.set_sweep_freq, use_complete=True)		# kHz
+			self.sweep_span.put(self.set_sweep_span, use_complete=True) 	# kHz
+			self.sweep_period.put(self.set_sweep_period, use_complete=True)	# us
+			self.pattern.put(self.set_drive_pattern, use_complete=True)
+			self.kicker_amp.put(self.set_kicker_amp, use_complete=True)		# %
+			# wait for puts to complete
+			while not all([
+				self.sweep_freq.put_complete,
+				self.sweep_span.put_complete,
+				self.sweep_period.put_complete,
+				self.pattern.put_complete,
+				self.kicker_amp.put_complete
+			]):
+				time.sleep(0.05)
+
+			last_kicker_call	: float = time.time()
+			last_fast_log_call	: float = time.time()
+			last_slow_log_call	: float = time.time()
+
+			print("|--------------------------------------------|")
+			print("|----------- BEGINNING EXPERIMENT -----------|")
+			print("|---------- Resonant Depolarisation ---------|")
+			print("|--------------------------------------------|")
+
+			# --- Sweep frequency by stepping through kicker drive frequency setpoint in loop
+			self.interruptible_sleep(1)
+
+			self.step: int = 0
+			if self.status_callback:
+				self.status_callback("Status: Running")
+			if self.timer_callback:
+				self.timer_callback()
+
+			# print(f"Sweep Direction = {self.sweep_direction}")
+			# print(f"Start freq = {self.set_sweep_freq}")
+			# print(f"End freq = {self.sweep_end}")
+
+			while self.step <= self.sweep_steps:
+
+				# listen for injections
+				now = time.time()
+
+				# --- update kicker setpoint at sweep_frequency / step_size
+				if (now - last_kicker_call) >= self.dwell_time:
+					# update kicker setpoint
+					self.step += 1
+					self.set_sweep_freq += self.sweep_direction * self.sweep_step_size*1e-3 	# kHz
+					self.sweep_freq.put(self.set_sweep_freq)			# kHz
+					last_kicker_call = time.time()
+
+				# --- Call fast_log_data() at fast_log_frequency Hz 
+				if (now - last_fast_log_call) >= 1/self.fast_log_frequency:
+					# ? Later implementation -- turn off kicker for 1s before data collection to damp driven betatron oscillations
+					# NOTE this doubles experiment time and will have to be updated in the metadata / print statement
+					# kicker_amp.put(0)
+					# time.sleep(1)
+					self.fast_log_data()
+					last_fast_log_call = time.time()
+					# kicker_amp.put(set_kicker_amp)
+
+				# --- Update progress bar, plot and ODB at 1 Hz
+				if (now - last_slow_log_call) >= 1/self.slow_log_frequency:
+					self.slow_log_data()
+					# update progress to QtGUI 
+					if self.progress_callback:
+						self.progress_callback(self.step)
+					else: # or std.out
+						printProgressBar(iteration=self.step, total=self.sweep_steps, decimals=2)
+					# push plot data to GUI
+					if self.plot_callback:
+						self.plot_callback(self.freqs, self.beam_loss_window_1, self.beam_loss_window_2)
+					# reset trigger
+					last_slow_log_call = time.time()
+
+				# --- Sleep on injections
+				if self._injecting:
+					# turn off kicker, sleep, turn it back on
+					self.kicker_amp.put(0)
+					# update status to GUI
+					if self.status_callback:
+						self.status_callback("Status: Sleeping (injection)")
+
+					self.interruptible_sleep(10)
+					
+					# turn kicker back on
+					self.kicker_amp.put(self.set_kicker_amp, use_complete=True)
+					while not self.kicker_amp.put_complete:
+						time.sleep(0.05)
+					# reset GUI status
+					if self.status_callback:
+						self.status_callback("Status: Running")
+					# reset state
+					self._injecting = False
+
+				# --- abort if signal is sent from GUI
+				if self._abort_requested:
+					if self.status_callback:
+						self.status_callback("Status: Experiment interrupted!")
+					break
+
+				# quick sleep so we keep listening for injections
+				time.sleep(0.01)
+
+		except Exception:
+			logging.error(traceback.format_exc())
 		
-		# --- plot data
-		fig4, axs4 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
+		finally:
+			print("|--------------------------------------------|")
+			print("|------------- EXPERIMENT DONE ! ------------|")
+			print("|--------------------------------------------|")
 
-		# plot normalised data:
-		for index, key in enumerate(beam_loss_window_2):
-			# Colour straight, make corresponding arc black
-			if index % 2 == 0:
-				axs4[0].plot(freqs_array, beam_loss_window_2[key]/np.max(beam_loss_window_2[key]) - 0.15*index, '-', label=key)
-			else:
-				axs4[0].plot(freqs_array, beam_loss_window_2[key]/np.max(beam_loss_window_2[key]) - 0.15*index, '-', color='k', label=key)	
-			axs4[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-		axs4[0].set_title('ADC counter loss 2 - All sectors')
-		axs4[0].set_xlabel('frequency (kHz)')
+			if self.status_callback:
+				self.status_callback("Status: Cleaning up...")
 
-		# Create energy top axis
-		second_axis = axs4[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-		second_axis.set_xlabel('Energy (GeV)')
+			if self.progress_callback:
+					self.progress_callback(self.sweep_steps)
 
-		# plot just sector 11 (normalised)
-		axs4[1].plot(freqs_array, beam_loss_window_2['11A']/np.max(beam_loss_window_2['11A']), '-', label='11A')
-		axs4[1].plot(freqs_array, beam_loss_window_2['11B']/np.max(beam_loss_window_2['11B']) + 0.15, '-', label='11B')
-		axs4[1].legend(loc='lower right')
-		axs4[1].set_title('Sector 11')
+			self.save_data()
 
-		plt.savefig(os.path.join(data_path, "adc_counter_loss_2.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+			# turn off kicker
+			self.kicker_amp.put(0, use_complete=True)
+			print("Kicker set to off.")
+			time.sleep(0.05)
+			print("Waiting for kicker put_complete...")
+			while not self.kicker_amp.put_complete:
+				time.sleep(0.05)
+			print("Kicker OFF!")
+
+			# TODO: Fix top-up normalisation breaking on one injection
+			# # process data if it exists
+			# if len(self.beam_loss_window_1.values()) > 0:
+			# 	print("Attempting top-up normalisation...")
+			# 	self.top_up_normalisation()
+			# 	if not plot_callback:
+			# 		print("Plotting data inside resdep")
+			# 		self.plot_data()
+			# 	else:
+			# 		print("GUI detected so no plot.")
+
+			# restore epicsBLM window settings
+			print("attempting to restore BLM inits...")
+			self.blm.restore_inits(mode="adc_counter_masks")
+			self.blm.restore_inits(mode="decimation")
+			
+			print('Done everything :)')
+
+		return None
 	
-	# Dont stop if plotting goes wrong
-	finally:
-		pass
-#
-# --------------------------------------------------------------------------------------------------------------------
-def plot_data(data: dict[str, list[float]], current_normalised: bool = False, filename: str = 'default'):
-	"""
-	Plots every BLM against frequency and energy (conversion from frequency, plotted on top axis)
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def calculate_range(self, ) -> None:
 
-	Parameters
-	----------
-	data: dict[str, list[float]]
-		Beam loss data which is a dictonary, containing loss for each sector and section
-	current_normalised: bool
-		Switch for (beam) current normalisation (yes/no)
-	filename: str
-		Filename for saving the plot .png
-	"""
-	try:
-		# convert to array
-		freqs_array = np.array(freqs)
-
-		# --- normalise data
-		data_norm = {}
-		if current_normalised:
-			data_current_norm = {}
-			for key in data:
-				data_current_norm[key] = np.array(data[key])/(np.array(current)**2)
-				data_norm[key] = data_current_norm[key]/np.max(data_current_norm[key])
+		# --- calcs
+		self.intrinsic_res_freq 	: float 		= self.f_rev * (self.tune + 0) + self.freq_shift				# 0th order, kHz
+		self.res_freq		   		: float 		= self.f_rev * (self.tune + self.harmonic) + self.freq_shift	# harmoinc order, kHz
+		self.expected_energy 		: float 		= (self.tune+6) * self.m_e * self.c**2 / (self.a_g * self.e) 	# eV
+		self.expected_energy_bounds : float 		= self.expected_energy * self.bounds						 	# eV
+		self.expected_energy_limits : list[float] 	= [self.expected_energy - self.expected_energy_bounds, self.expected_energy + self.expected_energy_bounds] # eV
+		self.freq_bounds			: float			= self.f_rev*((self.tune + 6)*self.bounds)						# kHz
+		self.sweep_limits 			: list[float] 	= [self.res_freq-self.freq_bounds, self.res_freq+self.freq_bounds] 	# kHz
+		self.sweep_range 			: float 		= self.freq_bounds*2											# kHz
+		self.sweep_steps 			: int 			= int(self.sweep_range*1e3//self.sweep_step_size) 
+		self.sweep_time 			: float 		= self.sweep_range*1e3/self.sweep_rate 							# s
+		self.dwell_time 			: float 		= self.sweep_step_size / self.sweep_rate 						# s
+		if self.sweep_direction == -1:
+			self.set_sweep_freq: float = self.sweep_limits[-1] 	# sweep start (higest frequency for backward scan), kHz
+			self.sweep_end	  : float = self.sweep_limits[0]
 		else:
-			for key in data:
-				data_norm[key] = data[key]/np.max(data[key])
+			self.set_sweep_freq: float = self.sweep_limits[0]	# sweep start (lowest frequency for forward scan), kHz
+			self.sweep_end	  : float = self.sweep_limits[-1]
+
+		number_of_top_ups = self.sweep_time//137 # every 2'17"
+		self.estimated_sweep_time: str = str(datetime.timedelta(seconds=int(self.sweep_time + 10*number_of_top_ups)))
+		# print('Estimated sweep time {0}'.format(time.strftime('%H:%M"%S', time.gmtime(self.sweep_time))))
+
+		return None
+
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def load_PVs(self, ) -> None:
+		# --- BLMs 
+		self.blm = BLMs()
+		self.blm.get_loss_PVs()
+		self.blm.get_adc_counter_mask_PVs()
+		self.blm.get_init_adc_counter_masks()
+		self.blm.get_decimation()
+
+		# --- drive
+		self.sweep_freq_act = epics.pv.get_pv(f'IGPF:{self.direction}:DRIVE:FREQ_ACT', connect=True)
+		self.sweep_freq 	= epics.pv.get_pv(f'IGPF:{self.direction}:DRIVE:FREQ', connect=True)
+		self.sweep_span 	= epics.pv.get_pv(f'IGPF:{self.direction}:DRIVE:SPAN', connect=True)
+		self.sweep_period 	= epics.pv.get_pv(f'IGPF:{self.direction}:DRIVE:PERIOD', connect=True)
+		self.kicker_amp 	= epics.pv.get_pv(f'IGPF:{self.direction}:DRIVE:AMPL', connect=True)
+		self.pattern 		= epics.pv.get_pv(f'IGPF:{self.direction}:DRIVE:PATTERN', connect=True)
+
+		# --- current
+		self.dcct = epics.pv.get_pv('SR11BCM01:CURRENT_MONITOR', connect=True)
+
+		# --- injection trigger
+		self.injection_trigger = epics.pv.get_pv("TS01EVG01:INJECTION_MODE_STATUS", connect=True, callback=(self.onValueChange))
+
+		# --- ODB beam size and position
+		self.ODB_PVs: dict[str, Any] = {}
+		self.ODB_PVs["X_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:X_SIZE_MONITOR", connect=True)
+		self.ODB_PVs["X_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:X_OFFSET_MONITOR", connect=True)
+		self.ODB_PVs["Y_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:Y_SIZE_MONITOR", connect=True)
+		self.ODB_PVs["Y_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)
+
+		# --- SR/LCW/RF temperatures
+
+		# initialise PV dicts
+		self.RF601_LCW_temperature_PVs	: dict[str, Any] = {}
+		self.RF602_LCW_temperature_PVs	: dict[str, Any] = {}
+		self.RF701_LCW_temperature_PVs	: dict[str, Any] = {}
+		self.RF702_LCW_temperature_PVs	: dict[str, Any] = {}
 		
+		self.RF601_body_temperature_PVs: dict[str, Any] = {}
+		self.RF602_body_temperature_PVs: dict[str, Any] = {}
+		self.RF701_body_temperature_PVs: dict[str, Any] = {}
+		self.RF702_body_temperature_PVs: dict[str, Any] = {}
+
+		self.magnet_temperature_PVs	: dict[str, Any] = {}
+		self.tunnel_air_temperature_PVs: dict[str, Any] = {}
+		self.beam_pipe_temperature_PVs	: dict[str, Any] = {}
+		self.slab_temperature_PVs		: dict[str, Any] = {}
+		self.SUBH_temperature_PVs		: dict[str, Any] = {}
+
+		self.temperature_PV_dicts = [
+			self.RF601_LCW_temperature_PVs,
+			self.RF602_LCW_temperature_PVs,
+			self.RF701_LCW_temperature_PVs,
+			self.RF702_LCW_temperature_PVs,
+			self.RF601_body_temperature_PVs,
+			self.RF602_body_temperature_PVs,
+			self.RF701_body_temperature_PVs,
+			self.RF702_body_temperature_PVs,
+			self.magnet_temperature_PVs,
+			self.tunnel_air_temperature_PVs,
+			self.beam_pipe_temperature_PVs,
+			self.slab_temperature_PVs,
+			self.SUBH_temperature_PVs		
+		]
+
+		# grab PVs
+		cavities = ["601", "602", "701", "702"]
+		# RF LCW
+		for cavity, PV_dict in zip(
+			cavities,
+			[self.RF601_LCW_temperature_PVs,
+			self.RF602_LCW_temperature_PVs,
+			self.RF701_LCW_temperature_PVs,
+			self.RF702_LCW_temperature_PVs]
+		):
+			prefix = f"SR0{cavity[0]}RF0{cavity[-1]}"
+			PV_dict[f"{prefix}RLD01:INLET_WATER_TEMP_MONITOR"]  = epics.pv.get_pv(f"{prefix}RLD01:INLET_WATER_TEMP_MONITOR", connect=True)
+			PV_dict[f"{prefix}CIR01:INLET_WATER_TEMP_MONITOR"]  = epics.pv.get_pv(f"{prefix}CIR01:INLET_WATER_TEMP_MONITOR", connect=True)
+			PV_dict[f"{prefix}KLY01:BODY_INLET_TEMP_MONITOR"]   = epics.pv.get_pv(f"{prefix}KLY01:BODY_INLET_TEMP_MONITOR", connect=True)
+			PV_dict[f"{prefix}CAV01:INLET_TEMPERATURE_MONITOR"] = epics.pv.get_pv(f"{prefix}CAV01:INLET_TEMPERATURE_MONITOR", connect=True)
+			
+		# RF body
+		for cavity, PV_dict in zip(
+			cavities,
+			[
+			self.RF601_body_temperature_PVs,
+			self.RF602_body_temperature_PVs,
+			self.RF701_body_temperature_PVs,
+			self.RF702_body_temperature_PVs]
+		):
+			prefix = f"SR0{cavity[0]}RF0{cavity[-1]}TES"
+			for i in range(1, 14+1, 1):
+				PV_dict[f"{prefix}{i:02d}:TEMPERATURE_MONITOR"] = epics.pv.get_pv(f"{prefix}{i:02d}:TEMPERATURE_MONITOR", connect=True)
+			prefix = f"SR0{cavity[0]}RF0{cavity[-1]}CIR01"
+			PV_dict[f"{prefix}:RF_TEMP_MONITOR"]  		= epics.pv.get_pv(f"{prefix}:RF_TEMP_MONITOR", connect=True)
+			PV_dict[f"{prefix}:REGULATOR_TEMP_MONITOR"]  	= epics.pv.get_pv(f"{prefix}:REGULATOR_TEMP_MONITOR", connect=True)
+			PV_dict[f"{prefix}:SHUNT_TEMP_MONITOR"]  		= epics.pv.get_pv(f"{prefix}:SHUNT_TEMP_MONITOR", connect=True)
+			
+		# magnets
+		magnet_temperature_PV_names = [
+			"SR01TES02:TEMPERATURE_MONITOR",
+			"SR01TES05:TEMPERATURE_MONITOR",
+			"SR01TES06:TEMPERATURE_MONITOR",
+			"SR09TES07:TEMPERATURE_MONITOR",
+			"SR09TES08:TEMPERATURE_MONITOR",
+			"SR09TES11:TEMPERATURE_MONITOR",
+			"SR12TES01:TEMPERATURE_MONITOR"
+		]
+		for PV_name in magnet_temperature_PV_names:
+			self.magnet_temperature_PVs[PV_name] = epics.pv.get_pv(PV_name, connect=True)
+
+		# tunnel air temp
+		tunnel_air_temperature_PV_names = [
+			"SR01TES03:TEMPERATURE_MONITOR",
+			"SR06TES01:TEMPERATURE_MONITOR",
+			"SR07TES01:TEMPERATURE_MONITOR"
+		]
+		for PV_name in tunnel_air_temperature_PV_names:
+			self.tunnel_air_temperature_PVs[PV_name] = epics.pv.get_pv(PV_name, connect=True)
+
+		# beam pipe
+		beam_pipe_temperature_PV_names = [
+			"SR08TES11:TEMPERATURE_MONITOR",
+			"SR08TES12:TEMPERATURE_MONITOR"
+		]
+		for PV_name in beam_pipe_temperature_PV_names:
+			self.beam_pipe_temperature_PVs[PV_name] = epics.pv.get_pv(PV_name, connect=True)
+
+		# slab
+		self.slab_temperature_PVs["SR04TES12:TEMPERATURE_MONITOR"] = epics.pv.get_pv("SR04TES12:TEMPERATURE_MONITOR", connect=True)
+
+		# SUBH
+		for i in range(1, 5+1, 1):
+			PV_name = f"TEMP-SUBH{i:02d}-IN:TEMP_MONITOR"
+			self.SUBH_temperature_PVs[PV_name] = epics.pv.get_pv(PV_name, connect=True)
+
+
+		# initialise temperature dicts
+		self.RF601_LCW_temperatures	: dict[str, float] = {}
+		self.RF602_LCW_temperatures	: dict[str, float] = {}
+		self.RF701_LCW_temperatures	: dict[str, float] = {}
+		self.RF702_LCW_temperatures	: dict[str, float] = {}
 		
-		# --- plot data
-		fig, axs = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
+		self.RF601_body_temperatures: dict[str, float] = {}
+		self.RF602_body_temperatures: dict[str, float] = {}
+		self.RF701_body_temperatures: dict[str, float] = {}
+		self.RF702_body_temperatures: dict[str, float] = {}
 
-		# plot normalised data:
-		
-		for index, key in enumerate(data_norm):
-			# Colour straight, make corresponding arc black
-			if index % 2 == 0:
-				axs[0].plot(freqs_array, data_norm[key] - 0.15*index, '-', label=key)
-			else:
-				axs[0].plot(freqs_array, data_norm[key] - 0.15*index, '-', color='k', label=key)	
-			axs[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-		axs[0].set_title('All sectors')
-		axs[0].set_xlabel('frequency (kHz)')
+		self.magnet_temperatures	: dict[str, float] = {}
+		self.tunnel_air_temperatures: dict[str, float] = {}
+		self.beam_pipe_temperatures	: dict[str, float] = {}
+		self.slab_temperatures		: dict[str, float] = {}
+		self.SUBH_temperatures		: dict[str, float] = {}
 
-		# Create energy top axis
-		second_axis = axs[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-		second_axis.set_xlabel('Energy (GeV)')
+		self.temperature_value_dicts = [
+			self.RF601_LCW_temperatures,
+			self.RF602_LCW_temperatures,
+			self.RF701_LCW_temperatures,
+			self.RF702_LCW_temperatures,
+			self.RF601_body_temperatures,
+			self.RF602_body_temperatures,
+			self.RF701_body_temperatures,
+			self.RF702_body_temperatures,
+			self.magnet_temperatures,
+			self.tunnel_air_temperatures,
+			self.beam_pipe_temperatures,
+			self.slab_temperatures,
+			self.SUBH_temperatures
+		]
 
-		# plot just sector 11 (normalised)
-		axs[1].plot(freqs_array, data_norm['11A'], '-', label='11A')
-		axs[1].plot(freqs_array, data_norm['11B'] + 0.15, '-', label='11B')
-		axs[1].legend(loc='lower right')
-		axs[1].set_title('Sector 11')
+		self.temperature_save_file_names = [
+			"RF601_LCW_temperatures.json",
+			"RF602_LCW_temperatures.json",
+			"RF701_LCW_temperatures.json",
+			"RF702_LCW_temperatures.json",
+			"RF601_body_temperatures.json",
+			"RF602_body_temperatures.json",
+			"RF701_body_temperatures.json",
+			"RF702_body_temperatures.json",
+			"magnet_temperatures.json",
+			"tunnel_air_temperatures.json",
+			"beam_pipe_temperatures.json",
+			"slab_temperatures.json",
+			"SUBH_temperatures.json"
+		]
 
-		# if no filename, pass datetime stamp
-		if filename == 'default':
-			filename = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
+		# grab PV.value(s) - no need for .get()
+		# loop over all PVs and their corresponding value dictionaries
+		# have to zip and nest loop due to unique keys for each cavity
+		for PV_dict, value_dict in zip(self.temperature_PV_dicts, self.temperature_value_dicts):
+			for key, pv in PV_dict.items():
+				value_dict[key] = pv.value
 
-		plt.savefig(os.path.join(data_path, filename + '.png'), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+		return None
 	
-	finally:
-		# I dont want the code to finish if plotting throws an error
-		pass
-#
-# Initiate experiment
-main()
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def config_save_files(self, ) -> None:
+
+		# --- init save path (format: Data\YYYY-mm-dd\HHMM+'h'\) e.g. 'Data\2025-09-25\0900h\'
+		start_time 	= datetime.datetime.now()
+		date_str 	= start_time.strftime("%Y-%m-%d")
+		hours_str 	= start_time.strftime("%H%Mh")
+		seconds_str = start_time.strftime("%Ss")
+		current_path = os.getcwd()
+		parent_path = os.path.dirname(current_path)
+		try:
+			os.makedirs(os.path.join(parent_path, "data", "resdep", date_str, hours_str), exist_ok=False)
+			self.data_path = os.path.join(parent_path, "data", "resdep", date_str, hours_str)
+		except OSError: 
+			# if you run the script again in the same minute, it appends seconds to the path name
+			os.makedirs(os.path.join(parent_path, "data", "resdep", date_str, hours_str, seconds_str))
+			self.data_path = os.path.join(parent_path, "data", "resdep", date_str, hours_str, seconds_str)
+
+		if self.data_path_callback:
+			self.data_path_callback(self.data_path)
+
+		# --- logging to console and file
+		if not self.plot_callback:
+			# Create a logger
+			logger = logging.getLogger('my_logger')
+			logger.setLevel(logging.DEBUG)
+			# Create a formatter to define the log format
+			formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+			# Create a file handler to write logs to a file
+			file_handler = logging.FileHandler(os.path.join(self.data_path, "logfile.log"))
+			file_handler.setLevel(logging.DEBUG)
+			file_handler.setFormatter(formatter)
+			# Create a stream handler to print logs to the console
+			console_handler = logging.StreamHandler()
+			console_handler.setLevel(logging.INFO)  # You can set the desired log level for console output
+			console_handler.setFormatter(formatter)
+			# Add the handlers to the logger
+			logger.addHandler(file_handler)
+			logger.addHandler(console_handler)
+
+		# --- init save vectors
+		self.freqs						: list[float] = []
+		self.set_freqs					: list[float] = []
+		self.current					: list[Union[float, None]] = []
+		self.timestamps_datetime		: list[datetime.datetime] = []
+		self.timestamps_str				: list[str] = []
+		self.slow_timestamps_datetime	: list[datetime.datetime] = []
+		self.slow_timestamps_str		: list[str] = []
+		self.injections					: list[datetime.datetime] = []
+		self.injections_str				: list[str] = []
+		self.beam_losses				: dict[str, list[float]] = {}
+		self.beam_loss_window_1 		: dict[str, list[float]] = {}
+		self.beam_loss_window_2 		: dict[str, list[float]] = {}
+		self.top_up_loss_window_1		: dict[str, list[float]] = {}
+		self.top_up_loss_window_2		: dict[str, list[float]] = {}
+		for key in self.blm.loss:
+			self.beam_losses[key] = []
+			self.beam_loss_window_1[key] = []
+			self.beam_loss_window_2[key] = []
+		self.ODB_data : dict[str, list[float]] = {}
+		for key in self.ODB_PVs:
+			self.ODB_data[key] = []
+		self.projected_end_time: datetime.datetime = start_time + datetime.timedelta(seconds=self.sweep_time)
+		self.metadata: dict[str, Any] = {
+			"direction"				: self.direction, 
+			"duration"				: time.strftime('%H:%M:%S', time.gmtime(self.sweep_time)), 
+			"fractional tune"		: self.tune,
+			"f_rev"					: self.f_rev,
+			"bounds (%)"			: self.bounds, 
+			"frequency bounds (kHz)": self.freq_bounds, 
+			"harmonic"				: self.harmonic, 
+			"sweep limits (kHz)"	: self.sweep_limits, 
+			"kicker amp (%)"		: self.set_kicker_amp, 
+			"drive pattern"			: self.set_drive_pattern, 
+			"sweep direction"		: self.sweep_direction,
+			"sweep rate (Hz/s)"		: self.sweep_rate, 
+			"sweep step size (Hz)"	: self.sweep_step_size, 
+			"sweep span (kHz)"		: self.set_sweep_span, 
+			"sweep period (us)"		: self.set_sweep_period, 
+			"start time"			: start_time.strftime("%Y-%m-%d %H:%M:%S"),
+			"projected end time"	: self.projected_end_time.strftime("%Y-%m-%d %H:%M:%S")
+		}
+
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def fast_log_data(self, ) -> None:
+		"""
+		Appends PV values to python lists at fast_log_frequency Hz. \\
+		Stored in memory until save_data() is called.
+
+		Saved Values
+		------------
+		- ADC window loss
+		- Kicker frequency
+		- Current
+		- timestamps
+		"""
+		try:
+			timestamp = datetime.datetime.now()
+			timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+			self.timestamps_datetime.append(timestamp)
+			self.timestamps_str.append(timestamp_str)
+			freq: Union[float, None] = self.sweep_freq_act.get()
+			if freq is not None:
+				self.freqs.append(freq) # kHz
+			else: 
+				self.freqs.append(0) 	# still append something so that the vectors are the same size
+			self.set_freqs.append(self.set_sweep_freq)
+			self.current.append(self.dcct.get())						# A
+			for key in self.blm.loss:
+				# beam_losses[key].append(blm.loss[key].get())	# Counts
+				self.beam_loss_window_1[key].append(self.blm.adc_counter_loss_1[key].get())
+				self.beam_loss_window_2[key].append(self.blm.adc_counter_loss_2[key].get())
+
+		except Exception:
+			logging.error(traceback.format_exc())
+
+		return None
+
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def slow_log_data(self, ) -> None:
+		"""
+		Appends PV values to python lists at slow_log_frequency Hz. \\
+		Stored in memory until save_data() is called.
+
+		Saved Values
+		------------
+		- ODB size and offset
+		- Emittance monitors
+		- timestamps
+		"""
+		try:
+			slow_timestamp = datetime.datetime.now()
+			slow_timestamp_str = slow_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+			self.slow_timestamps_datetime.append(slow_timestamp)
+			self.slow_timestamps_str.append(slow_timestamp_str)
+			for key in self.ODB_data:
+				self.ODB_data[key].append(self.ODB_PVs[key].get()) # um
+
+		except Exception:
+			logging.error(traceback.format_exc())
+
+		return None
+	
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def calcf_revfromMasterRF(self, ) -> None:
+		"""
+		Member function \\
+		Calculate a more accurate (real-time) f_rev based off current Master RF  
+		
+		Updates
+		-------
+		self.f_rev: float
+		"""
+		# Grab masterRF from EPICS
+		# if disconnected, .get() will return none and f_rev with throw exception
+		masterRF = epics.pv.get_pv('SR00MOS01:FREQUENCY_MONITOR', connect=True)
+		masterRFact: Union[float, None] = masterRF.get(timeout=5)			# Hz
+		if masterRFact is not None:
+			self.f_rev: float = 1e-3 * masterRFact/360 	# kHz 
+		return None
+	
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def interruptible_sleep(self, seconds: int) -> bool:
+		"""
+		Sleeps over long periods of time, waking often to check states (abort for example)
+		"""
+		end = time.time() + seconds
+		while time.time() < end:
+			if self._abort_requested:
+				return True
+			# sleep quickly
+			time.sleep(0.01)
+		
+		return False
+	
+	# ------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	def calculate_adc_counter_windows(self, ):#sector: str, method: Literal["loss_minimum", "integrated_half"] = "loss_minimum") -> None:
+		"""
+		Calculates the offsets and window lengths of the two counter windows for a specific sector \\
+		**Note**: this only works for one sector, since there is no way to make the ADC windows wrap around T0. \\
+		Thus, the 'half' of the beam that the ADC windows capture informs the bunches that should be depolarised by the BbB, \\
+		and said half is unlikely to line up with the bunch numbers (*i.e.* unlikely to be bunches 1--180). \\
+		For now, uses the bend as the reference, but could in the future average the windows between the straight and the bend.
+		\\
+		Due to the restrictions of the windows to T0 and the phase shifting of the fill pattern as a function of sector, the calculations \\
+		of charge equavlent windows are a little tricky to think about. There are basically two different conditions:
+		1. The fill pattern is centred:
+
+			||   _____________   ||
+			||  |             |  ||
+			||__|             |__||
+
+		in which case, the windows should just be from each edge to the centre (simple). \\
+		OR,
+
+		2. The fill pattern is not centred:
+
+			||__________      __||      ||__      __________||       ||_______      _______||
+			||          |    |  ||  OR  ||  |    |          ||   OR  ||       |    |       ||
+			||          |____|  ||      ||  |____|          ||       ||       |____|       ||
+
+		in which case, the length of the windows depends on which side the empty buckets lie.
+
+		To calculate if the pattern is in the centre, we can determine the edges of the fill pattern from the loss minumum. \\
+		We will call these the start and end, to not confuse left and right when considering the phase shift of the fill pattern.
+
+		The pattern is in the centre if, in reference to the mid point of the empty buckets, either the start or end of the fill pattern \\
+		exceeds the bounds of SUM_DEC. You can think of this as the reciprocal lattice tranlation vector G for Brillouin zones. \\
+		So we can match this case against where the start and end are calculated as within the bounds of SUM_DEC (not centred) 
+
+		We require exactly 150 *filled* buckets on each side (in each window). For the centred case (1), we simply move the diving line \\
+		with the midpoint of the fill pattern so that is split 150:150 every time, no matter the distribution of the empty buckets. \\
+		Note that the centre of the fill pattern is just the pi/2 phase shift of the minimum.
+
+		For the non-centred case (2), there are two sub-cases. The first, where the empty buckets are fully enclosed in one of the windows, \\
+		and the *special* case, where the empty buckets are centred and exactly split the fill pattern 150:150. In the special case, the diving line \\
+		can be anywhere in the centre unfilled 60. When it's not in the centre, there will be less than 150 filled buckets on one side, \\
+		and so the line will be locked at 180 +- 30 to keep the split even. These two non-centred cases can be combined since the line can be anywhere \\
+		in the empty buckets for the special case, which includes 180 +- 30.
+
+		Updates (class scope)
+		-------
+		calculated_adc_counter_windows : list[int]
+			list containing counters 1 & 2 window and offset settings for the given sector \\
+			Values are a list of [offset_1, window_1, offset_2, window_2]
+
+		depolarised_bunches : list[int]
+			list containing the start:stop range of bunches to be depolarised using the BbB
+			This is basically a conversion from the ADC cycles (window length and pos) to bunch number
+		"""
+
+		# global calculated_adc_counter_windows, depolarised_bunches, adc_cycle_at_loss_min, bucket_at_loss_min, FPM_Y_minimum_bucket, depolarised_bunch_start, depolarised_bunch_end
+		# global calculated_adc_counter_windows, depolarised_bunch_start, depolarised_bunch_end
+
+
+		# dividing_line = 0
+
+		# try:
+			
+		# 	loss_minimum 			: float = np.min(replicated_fill_pattern[f"{sector}B"][:,1])
+		# 	adc_cycle_at_loss_min_index 	= np.where(replicated_fill_pattern[f"{sector}B"][:,1] == loss_minimum)[0].tolist()[0]
+		# 	adc_cycle_at_loss_min 		 	= int(replicated_fill_pattern[f"{sector}B"][adc_cycle_at_loss_min_index,0])
+		# 	bucket_at_loss_min  			= int(adc_cycle_at_loss_min*buckets_per_cycle)
+
+		# 	print(f"ADC cycle at loss minimum = {adc_cycle_at_loss_min}")
+		# 	print(f"bucket at loss minimum = {bucket_at_loss_min}")
+
+
+		# 	if method == "loss_minimum":
+		# 		print("# --- Mode: loss minimum --- #")
+		# 		# case (0): minimum (offset) is not captured due to finite window size
+		# 		if (adc_cycle_at_loss_min  == window_centre) or (adc_cycle_at_loss_min == (SUM_DEC - window_centre - 1)):
+		# 			# Here, the loss minimum is not captured, but I don't know if I can really do anything about it
+		# 			# I think the best course of action would be to assume that the fill pattern is perfectly centred
+		# 			# That way, the determination is at best window_centre/2 cycles out, not otherwise at max window_centre cycles.
+		# 			dividing_line = SUM_DEC//2
+
+		# 		# case (1): centred fill pattern
+		# 		elif (adc_cycle_at_loss_min <= 30*cycles_per_bucket) or (adc_cycle_at_loss_min >= 330*cycles_per_bucket):
+		# 			# dividing line is the centre of the fill pattern = loss min phase flipped pi/2
+		# 			dividing_line: int = int(np.abs(adc_cycle_at_loss_min - 180*cycles_per_bucket))
+				
+		# 		# case (2): Empty buckets are on the left: 
+		# 		elif (adc_cycle_at_loss_min <= 150*cycles_per_bucket):
+		# 			# see notes above
+		# 			dividing_line: int = int(210*cycles_per_bucket)
+
+		# 		# case (3): Empty buckets are on the right:
+		# 		elif (adc_cycle_at_loss_min > 150*cycles_per_bucket):
+		# 			# see notes above
+		# 			dividing_line: int = int(150*cycles_per_bucket)
+				
+		# 	elif method == "integrated_half":
+		# 		print("# --- Mode: integrated half --- #")
+		# 		# integrate loss
+		# 		integrated_loss = np.sum(replicated_fill_pattern[f"{sector}B"][:,1])
+		# 		cumulative_loss = np.cumsum(replicated_fill_pattern[f"{sector}B"][:,1])
+				
+		# 		# weighted left half
+		# 		dividing_line = np.where(cumulative_loss < integrated_loss//2)[0].tolist()[-1]
+			
+		# 	else:
+		# 		ValueError("Incorred mode.")
+
+		# 	# --- calculations 
+		# 	# format: [offset_1, window_1, offset_2, window_2]
+		# 	calculated_adc_counter_windows = [0, dividing_line, dividing_line, (SUM_DEC - dividing_line)]
+		# 	bucket_offset_1, bucket_window_1, bucket_offset_2, bucket_window_2 = [int(buckets_per_cycle*adc_cycle) for adc_cycle in calculated_adc_counter_windows]
+
+		# 	# FPM_Y minimum
+		# 	FPM_Y_minimum_bucket = int(buckets[np.where(FPM_Y_original == np.min(FPM_Y_original))[0].tolist()[0]])
+		# 	print(f"FPM_Y min bucket = {FPM_Y_minimum_bucket}")
+		
+		# 	bucket_offset_1 += int(FPM_Y_minimum_bucket - bucket_at_loss_min)
+		# 	bucket_offset_2 += int(FPM_Y_minimum_bucket - bucket_at_loss_min)
+		# 	# After aligning the empty buckets, are the starts of the windows within 1:360?
+		# 	# If not, loop in circular buffer.
+		# 	if (bucket_offset_1 < 1) or (bucket_offset_1 > 360):
+		# 		bucket_offset_1 = (bucket_offset_1 - 1) % 360 + 1
+		# 	if (bucket_offset_2 < 1) or (bucket_offset_2 > 360):
+		# 		bucket_offset_2 = (bucket_offset_2 - 1) % 360 + 1
+
+		# 	# The start of one window is the end of the other.
+		# 	depolarised_bunch_start = bucket_offset_1
+		# 	depolarised_bunch_end 	= bucket_offset_2-1
+		# 	depolarised_bunches = f"{depolarised_bunch_start}:{depolarised_bunch_end}"
+
+		# 	print("Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]")
+		# 	print(calculated_adc_counter_windows)
+		# 	print("Corresponding depolarised bunches for BbB:")
+		# 	print(depolarised_bunches)
+
+		# except Exception:
+		# 	logging.error(traceback.format_exc())
+		
+
+		return None
+
+	# *--------------------------------* #
+	# *-------- Post-processing -------* #
+	# *--------------------------------* #
+	# --------------------------------------------------------------------------------------------------------------------
+	def top_up_normalisation(self,) -> None:
+		"""
+		Normalises the data to the change in the 'charge equivalent' halves of the beam after top-up. \\
+		Since the top-up happens to a single bunch, this creates a step change in the *ratio* of the \\
+		charge equivalent windows, which looks very much like the depolarisation resonance. 
+		"""
+
+		if len(self.injections) == 0:
+			print("No injections detected => no top-up normalisation applied.")
+			return None
+
+		print("(inside function) Attempting top-up normalisation...")
+
+		# copy loss data to new dicts
+		for key in self.blm.loss:
+			self.top_up_loss_window_1[key] = self.beam_loss_window_1[key]
+			self.top_up_loss_window_2[key] = self.beam_loss_window_2[key]
+		
+		# convert regular timestamps to type: numpy.datetime64
+		injections_np: npt.NDArray[np.datetime64] = np.array(self.injections, dtype="datetime64")
+		timestamps_np: npt.NDArray[np.datetime64] = np.array(self.timestamps_datetime, dtype="datetime64")
+
+		n_seconds_to_average: int = 3
+		last_index: int = len(timestamps_np)-1
+
+		try:
+			for inj_time in injections_np:
+				# find index in dataset that matches (just before) injection time
+				index = np.where([inj_time < timestamps_np])[0].tolist()[-1]
+				# Make sure there is sufficient data available to average
+				if (index == 0) or (index == last_index):
+					# ignore injections at very start or end
+					continue
+				before = index - (n_seconds_to_average/self.fast_log_frequency)
+				after  = index + (n_seconds_to_average/self.fast_log_frequency)
+				if before < 0:
+					before = 0
+				if after > last_index:
+					after = last_index
+				# --- window 1
+				for loss in self.top_up_loss_window_1.values():
+					# take the average of the data before and after injection
+					mean_before_inj = np.mean(loss[before:index])
+					mean_after_inj  = np.mean(loss[index:after])
+					# calculate scaling factor for which to scale the data AFTER injection to match that BEFORE injection
+					scaling_factor = float(mean_before_inj/mean_after_inj)
+					# scale ALL data after injection
+					loss[index:] = [value * scaling_factor for value in loss[index:]]
+				# --- window 2
+				for loss in self.top_up_loss_window_2.values():
+					# take the average of the data before and after injection
+					mean_before_inj = np.mean(loss[before:index])
+					mean_after_inj  = np.mean(loss[index:after])
+					# calculate scaling factor for which to scale the data AFTER injection to match that BEFORE injection
+					scaling_factor = float(mean_before_inj/mean_after_inj)
+					# scale ALL data after injection
+					loss[index:] = [value * scaling_factor for value in loss[index:]]
+
+			print("Normalised!")
+
+		except Exception:
+			logging.error(traceback.format_exc())
+
+			# ? The data should stop appending while sleeping, so I probably don't need the timedelta...
+			# after injection (10s sleep)
+			# after_inj = inj_time + datetime.timedelta(seconds=10) 
+			
+
+		return None
+
+	# --------------------------------------------------------------------------------------------------------------------
+	def save_data(self, ) -> None:
+		"""
+		Saves PV data to text, json and csv files depending on structure \\
+		Also append entime to metadata and saves to json. \\
+		Save path is Data/{YYYY-mm-dd}/{HHHHh}/ \\
+		*e.g.* Data/2025-10-20/0900h/
+		"""
+
+		try:
+			print("Saving data...")
+
+			# metadata
+			del self.metadata['projected end time']
+			end_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+			self.metadata.update({'end time': end_time, 'Last sweep frequency': self.set_sweep_freq})
+			with open(os.path.join(self.data_path, 'metadata.json'), 'w') as f:
+				json.dump(self.metadata, f)
+			
+			# freqs as txt
+			with open(os.path.join(self.data_path, 'freqs.txt'), 'w') as f:
+					for value in self.freqs:
+						f.write(str(value) + '\n')
+			with open(os.path.join(self.data_path, 'set_freqs.txt'), 'w') as f:
+					for value in self.set_freqs:
+						f.write(str(value) + '\n')
+			
+			# current as txt
+			with open(os.path.join(self.data_path, 'current.txt'), 'w') as f:
+					for value in self.current:
+						f.write(str(value) + '\n')
+
+			# timestamps as txt
+			with open(os.path.join(self.data_path, 'timestamps.txt'), 'w') as f:
+					for value in self.timestamps_str:
+						f.write(value + '\n')
+
+			# adc counter loss 1
+			with open(os.path.join(self.data_path, 'adc_counter_loss_1.json'), 'w') as f:
+				json.dump(self.beam_loss_window_1, f)
+			# adc counter loss 2
+			with open(os.path.join(self.data_path, 'adc_counter_loss_2.json'), 'w') as f:
+				json.dump(self.beam_loss_window_2, f)
+
+			# ODB size and offset
+			with open(os.path.join(self.data_path, 'ODB_data.json'), "w") as f:
+				json.dump(self.ODB_data, f)
+
+			# injection timestamps as txt
+			with open(os.path.join(self.data_path, 'injections.txt'), 'w') as f:
+					for value in self.injections_str:
+						f.write(value + '\n')
+
+			# top up loss (if any)
+			with open(os.path.join(self.data_path, "top-up_loss_window_1.json"), "w") as f:
+				json.dump(self.top_up_loss_window_1, f)
+			with open(os.path.join(self.data_path, "top-up_loss_window_2.json"), "w") as f:
+				json.dump(self.top_up_loss_window_2, f)
+
+			# temperatures (will need a separate folder)
+			temperatures_path = os.path.join(self.data_path, "temperatures")
+			os.mkdir(temperatures_path)
+			# each dict as its own .json
+			for temperature_dict, save_file_name in zip(self.temperature_value_dicts, self.temperature_save_file_names):
+				with open(os.path.join(temperatures_path, save_file_name), "w") as f:
+					json.dump(temperature_dict, f)
+
+		except Exception:
+			logging.error(traceback.format_exc())
+
+		print("\n Data saved!")
+
+		return None
+
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------	
+	def plot_data(self, ) -> None:
+		"""
+		Plots loss ratio between polarised and depolarised bunches. \\
+		Fits error function to sectors with compatible timing with BbB / FPM. \\
+		Also plots ODB beam size and offset to check for any major disturbances.
+		"""
+
+		try:
+
+			print("Attempting to plot ratio data...")
+
+			ratio_loss: dict[str, Any] = {}
+			freqs_array = np.array(self.freqs)
+			fitted_beam_energy_frequencies: dict[str, float] = {}
+			fitted_beam_energies: dict[str, float] = {}
+
+			for key in self.beam_loss_window_1:
+				ratio_loss[key] = np.array(self.beam_loss_window_1[key])/np.array(self.beam_loss_window_2[key])
+
+			# fit is better when the data is centred on the resonance
+			start: int = 5000 
+			sigma: int = 10
+			# Good sectors aligned with depolarised bunch windows (i.e. similar fill patterns to that observed in sector 11)
+			sectors: list[str] = ["1", "4", "8", "11", "12", "13"]
+			fig, axs = plt.subplots(1,1, figsize=(7,5))
+			for sector in sectors:
+				# filter / bin
+				bend: npt.NDArray[np.float64] = gaussian_filter1d(ratio_loss[f"{sector}B"][start:], sigma)
+				# set zero
+				bend += np.min(bend)
+				# normalise
+				bend *= 1/np.max(bend)
+				# plot
+				axs.plot(freqs_array[start:], bend + 0.03 * float(sector), label=f"{sector}B")
+
+				# -- do fit
+				popt, pcov = optimize.curve_fit(model, freqs_array[start:], bend, p0=[1219, 1, 1, 1])
+				y_model: npt.NDArray[np.float64] = model(freqs_array[start:], *popt)
+
+				# -- calculate goodness of fit
+				# residual sum of squares
+				ss_res = np.sum((bend - y_model)**2)
+				# total sum of squares
+				ss_tot = np.sum((bend - np.mean(bend))**2)
+				# r-squared
+				r2 = 1 - (ss_res / ss_tot)
+
+				# save in dicts
+				fitted_beam_energy_frequencies[f"{sector}B"] = popt[0]  
+				fitted_beam_energies[f"{sector}B"] = energy_calc(freq=popt[0], f_rev=self.f_rev, harmonic=self.harmonic)
+				print(f"f0={fitted_beam_energy_frequencies[f'{sector}B']:0.3f}, E0={fitted_beam_energies[f'{sector}B']:0.5f}, r^2={r2}")
+
+				# plot baseline
+				axs.axhline(y=y_model[0] + 0.03 * float(sector), xmin=0, xmax=1, alpha=0.1, linestyle="--", color="black")
+				# plot fit
+				axs.plot(freqs_array[start:], y_model + 0.03 * float(sector), linestyle='--', color="red")
+
+			axs.legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
+			axs.set_xlim(freqs_array[start], freqs_array[-1])
+			# Create energy top axis
+			second_axis = axs.secondary_xaxis(
+				"top", 
+				functions=(
+					partial(energy_calc, f_rev=self.f_rev, harmonic=self.harmonic), # type: ignore
+					partial(freq_calc, f_rev=self.f_rev, harmonic=self.harmonic)
+				)
+			)
+			second_axis.set_xlabel('Energy (GeV)')
+
+			# define sig fig calc:
+			def round_to_1(x) -> float:
+				return np.round(x, -int(np.floor(np.log10(abs(x)))))
+
+			# calculate 2* st.dev
+			f_rdp_mean				: np.floating = np.mean(np.array(list(fitted_beam_energy_frequencies.values())))
+			E0_mean					: np.floating = np.mean(np.array(list(fitted_beam_energies.values())))
+			E0_stdev				: np.floating = 2*np.std(np.array(list(fitted_beam_energies.values())))
+			E0_stdev_sigfig			: float 	  = round_to_1(E0_stdev)
+			E0_mean_sigfig			: np.floating = np.round(E0_mean, -int(np.floor(np.log10(abs(E0_stdev)))))
+			sideband_energy_shift	: np.floating = E0_mean - energy_calc(freq=(f_rdp_mean - self.f_rev*self.v_synch), f_rev=self.f_rev, harmonic=self.harmonic)
+			expected_sidebands		: list[Union[float, np.floating]] = [
+				energy_calc(freq=(f_rdp_mean - 11.756), f_rev=self.f_rev, harmonic=self.harmonic), 
+				energy_calc(freq=(f_rdp_mean + self.f_rev*self.v_synch), f_rev=self.f_rev, harmonic=self.harmonic)
+			]
+
+			print(f"mean E0 = {E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stdev_sigfig*1e6:.0f} keV")
+			print(f"Sidebands expected at " + u"(\u00B1" + f"{sideband_energy_shift*1e3:.2f} MeV): " + f"{expected_sidebands[0]:.4f}, {expected_sidebands[1]:.4f}")
+
+			# shade region on plot
+			axs.axvspan(
+				xmin=freq_calc(energy=float(E0_mean-E0_stdev), f_rev=self.f_rev, harmonic=self.harmonic), 
+				xmax=freq_calc(energy=float(E0_mean+E0_stdev), f_rev=self.f_rev, harmonic=self.harmonic), 
+				alpha=0.1, 
+				color="black"
+			)
+
+			plt.savefig(os.path.join(self.data_path, "ratio_loss.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+
+			print("Data plotted!")
+
+			plt.show()
+
+		except Exception:
+			logging.error(traceback.format_exc())
+
+
+		# ----------------------------------- #
+		# ------	ODB	beam size  	    ----- #
+		# ----------------------------------- #
+
+		try:
+			fig, axs = plt.subplots(2, 2, figsize=(8,6), layout="tight")
+
+			fig.suptitle("ODB size and offset")
+
+			axs[0,0].plot(self.ODB_data["X_size"])
+			axs[0,1].plot(self.ODB_data["X_offset"])
+			axs[1,0].plot(self.ODB_data["Y_size"])
+			axs[1,1].plot(self.ODB_data["Y_offset"])
+
+			axs[0,0].set_title(r"X beam size")
+			axs[0,1].set_title(r"X beam offset")
+			axs[1,0].set_title(r"Y beam size")
+			axs[1,1].set_title(r"Y beam offset")
+
+			axs[0,0].set_ylabel(r"X beam size ($\mu$m)")
+			axs[0,1].set_ylabel(r"X beam offset ($\mu$m)")
+			axs[1,0].set_ylabel(r"Y beam size ($\mu$m)")
+			axs[1,1].set_ylabel(r"Y beam offset ($\mu$m)")
+
+			plt.savefig(os.path.join(self.data_path, "ODB_size_and_offset.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+
+			plt.show()
+
+		except Exception:
+			logging.error(traceback.format_exc())
+
+		return None
+
+	
+	# *--------------------------------* #
+	# *---------- PV callbacks --------* #
+	# *--------------------------------* #
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def onValueChange(self, pvname=None, value=None, host=None, **kws):
+		# * Cannot do .put() or .get() inside callback
+		# It looks like .get() works but really I think it's simply getting PV.value which is cached.
+
+		try:
+			if value == 2:
+				# record timestamp
+				inj_time = datetime.datetime.now()
+				inj_time_str = inj_time.strftime("%Y-%m-%d %H:%M:%S")
+				self.injections.append(inj_time)
+				self.injections_str.append(inj_time_str)
+
+				# toggle state
+				self._injecting = True
+
+		except Exception:
+			logging.error(traceback.format_exc())
+
+
+	# *--------------------------------* #
+	# *---------- GUI Signals ---------* #
+	# *--------------------------------* #
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def request_abort(self, ) -> None:
+		"""
+		Changes the abort state to True, which will interrupt the experiment loop on the next iteration
+		"""
+		self._abort_requested = True
+		return None
+
+# ! write this
+if __name__ == "__main__":
+	print("resdep.py contains a class file ResonantDepolarisation which ideally should be instanced in a top-level script and not directly run.")
+	print("Direct execution under development.")
+	# ask user for init inputs
+	# call run_experiment()

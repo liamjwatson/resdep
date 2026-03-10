@@ -1,0 +1,1 @@
+{"kicker_amp": 100, "harmonic": 1, "bounds": 0.012, "sweep_direction": "Forward", "sweep_rate": 2.5, "sweep_step_size": 0.5, "drive_pattern": "61:206", "ADC_offset_1": 0, "ADC_window_1": 35, "ADC_offset_2": 35, "ADC_window_2": 51}
