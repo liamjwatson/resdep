@@ -1,5 +1,7 @@
 .venv/
 __pycache__/
+dist/*.txt
+bitbucket-pipelines.yml
 data/
 Data/
 fill_pattern_alignment/
@@ -7,5 +9,3 @@ config/average_SA_with_decimation/
 old_scripts/
 tests/
 LiberaBLM_python_examples/
-.python-version
-pyproject.toml

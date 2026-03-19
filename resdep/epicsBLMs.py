@@ -6,6 +6,7 @@ import warnings
 import epics
 import time
 import os
+from pathlib import Path
 
 # ! Things to consider
 # Synching up all the BLMs by setting a processing delay from ADC to SUM
@@ -16,54 +17,6 @@ class BLMs:
     """
     A libera object which handles EPICS BLM PVs, values, states, and common functions \\
     *e.g.* get PVs, get initial values, restore defaults
-
-    Methods
-    -------
-    get_loss_PVs() -> tuple[dict[str, Any], ...]
-        Loads beam loss PVs associated with regular slow acquision (SA) 
-        and the two ADC counter masks
-        Returns dicts of PVs with keys of form "{sector}{section}", *e.g.* '11A'
-
-    get_adc_counter_mask_PVs() -> tuple[dict[str, Any], ...]
-        Loads PVs associated with adc counter masks (offset and window for masks 1 & 2)
-        Returns dicts of PVs with keys of form "{sector}", *e.g.* '7'
-    
-    get_settings_PVs() -> tuple[dict[str, Any], ...]
-        Loads PVs associated with BLM settings (Vgc = gain voltage, att = attenuation)
-        Returns dicts of PVs with keys of form "{sector}{section}", *e.g.* '5B'
-
-    get_init_adc_counter_masks(self,) -> tuple[dict[str, float |None], ...], | None:
-        Grabs the initial (not default, **initial**, *i.e.* at the time of calling this method)
-        values of the adc counter masks (offset and window for masks 1 & 2)
-        Returns dicts of values with keys of form "{sector}", *e.g.* '7'
-    
-    get_init_settings(self,) -> tuple[dict[str, float| None], ...] | None:
-        Grabs the initial (not default, **initial**, *i.e.* at the time of calling this method)
-        BLM settings (Vgc = gain voltage, att = attenuation)
-        Returns dicts of values with keys of form "{sector}", *e.g.* '7'
-
-    get_sector11(self, ) -> tuple[dict[str, Any], ...] | Any
-        Loads all PVs and initial values from the methods list above 
-        but only for sector 11 (upstream of the scrapers)
-        Returns dicts of both PVs and initial values with appropriate keys
-        (see above functions)
-
-    restore_inits(mode='all', 'settings', or 'adc_counter_masks') -> None
-        Restores the desired PVs to the stored initial values
-        Prints when done
-        
-    inits_to_json(mode='all', 'settings', or 'adc_counter_masks') -> None
-        Writes desired inits to json file in ~/BLM_settings/... 
-        Prints when done
-    
-    restore_from_json(mode='all', 'settings', or 'adc_counter_masks', path: str) -> None
-        Restores the desired PVs from saved JSON files
-        Prints when done
-    
-    restore_defaults(mode='all') -> None
-        Alias for restore_from_json(), but for stored master default JSONs
-        Prints when done
-
     """
     def __init__(self, ):
         
@@ -95,6 +48,7 @@ class BLMs:
         self.adc_counter_window_1       : dict[str, Any] = {}
         self.adc_counter_offset_2       : dict[str, Any] = {}
         self.adc_counter_window_2       : dict[str, Any] = {}
+        self.integrated_buffer_loss     : dict[str, Any] = {}
         self.counting_mode              : dict[str, Any] = {}
         self.threshold_count_diff       : dict[str, Any] = {}
         self.sumdec_adc_mask_offset     : dict[str, Any] = {}
@@ -157,15 +111,15 @@ class BLMs:
         # grab PVs in loop
         for sector in range(1,14+1,1):
             for section in ['A', 'B']:
-                self.loss[f"{sector}{section}"]                 = epics.pv.get_pv(f"SR{sector:02d}BLM01:SIGNALS_SA_{section}_MONITOR", connect=True)
-                self.adc_counter_loss_1[f"{sector}{section}"]   = epics.pv.get_pv(f"SR{sector:02d}BLM01:signals:counter.{section}1", connect=True)
-                self.adc_counter_loss_2[f"{sector}{section}"]   = epics.pv.get_pv(f"SR{sector:02d}BLM01:signals:counter.{section}2", connect=True)
+                self.loss[f"{sector}{section}"]                     = epics.pv.get_pv(f"SR{sector:02d}BLM01:SIGNALS_SA_{section}_MONITOR", connect=True)
+                self.adc_counter_loss_1[f"{sector}{section}"]       = epics.pv.get_pv(f"SR{sector:02d}BLM01:signals:counter.{section}1", connect=True)
+                self.adc_counter_loss_2[f"{sector}{section}"]       = epics.pv.get_pv(f"SR{sector:02d}BLM01:signals:counter.{section}2", connect=True)
+                self.integrated_buffer_loss[f"{sector}{section}"]   = epics.pv.get_pv(f"SR{sector:02d}BLM01:signals:adc_integrated.{section}", connect=True)
         
         # update state
         self._got_loss_PVs = True
 
-        return self.loss, self.adc_counter_loss_1, self.adc_counter_loss_2
-    #
+        return self.loss, self.adc_counter_loss_1, self.adc_counter_loss_2, self.integrated_buffer_loss
     # ----------------------------------------------------------------------------------------------------------
     def get_adc_counter_mask_PVs(self, ) -> tuple[dict[str, Any],...]:
         """
@@ -191,7 +145,6 @@ class BLMs:
         self._got_adc_counter_mask_PVs = True
 
         return self.adc_counter_offset_1, self.adc_counter_window_1, self.adc_counter_offset_2, self.adc_counter_window_2, self.counting_mode, self.threshold_count_diff
-    #
     # ----------------------------------------------------------------------------------------------------------
     def get_init_adc_counter_masks(self,) -> Union[tuple[dict[str, Union[float, None]], ...], None]:
         """
@@ -231,7 +184,6 @@ class BLMs:
         self._got_init_adc_counter_masks = True
 
         return self.init_adc_counter_offset_1, self.init_adc_counter_window_1, self.init_adc_counter_offset_2, self.init_adc_counter_window_2, self.init_counting_mode, self.init_threshold_count_diff
-    #
     # ----------------------------------------------------------------------------------------------------------
     def apply_adc_counter_masks(self, offset_1: int, window_1: int, offset_2: int, window_2: int, counting_mode=0) -> None:
         """
@@ -273,7 +225,6 @@ class BLMs:
         print("ADC counter masks applied!")
 
         return None
-    #
     # ----------------------------------------------------------------------------------------------------------
     def get_sumdec_adc_mask_PVs(self, ) -> tuple[dict[str, Any],...]:
         """
@@ -293,7 +244,6 @@ class BLMs:
         self._got_sumdec_adc_mask_PVs = True
 
         return self.sumdec_adc_mask_offset, self.sumdec_adc_mask_window
-    #
     # ----------------------------------------------------------------------------------------------------------
     def get_init_sumdec_adc_masks(self,) -> Union[tuple[dict[str, Union[float, None]], ...], None]:
         """
@@ -321,7 +271,6 @@ class BLMs:
         self._got_init_sumdec_adc_masks = True
 
         return self.init_sumdec_adc_mask_offset, self.init_sumdec_adc_mask_window
-    #
     # ----------------------------------------------------------------------------------------------------------
     def get_decimation(self,) -> Union[tuple[dict[str, Any], ...], None]:
         """
@@ -372,7 +321,6 @@ class BLMs:
         return (self.sum_decimation, self.t0_interval, self.t0_interval_expected,
                 self.init_sum_decimation, self.init_t0_interval, self.init_t0_interval_expected
         )
-    #
     # ----------------------------------------------------------------------------------------------------------
     def apply_full_decimation(self, ) -> None:
         """
@@ -401,8 +349,6 @@ class BLMs:
         print("Full decimation applied!")
 
         return None
-
-    #
     # ----------------------------------------------------------------------------------------------------------
     def get_settings_PVs(self, ) -> tuple[dict[str, Any], ...]:
         """
@@ -431,7 +377,6 @@ class BLMs:
         self._got_settings_PVs = True
 
         return self.Vgc, self.att, self.decay_Vgc, self.decay_att
-    #
     # ----------------------------------------------------------------------------------------------------------
     def get_init_settings(self,) -> Union[tuple[dict[str, float], ...], None]:
         """
@@ -467,8 +412,6 @@ class BLMs:
         self._got_init_settings = True
 
         return self.init_Vgc, self.init_att, self.init_decay_Vgc, self.init_decay_att
-    
-    #
     # ----------------------------------------------------------------------------------------------------------
     def get_sector11(self, ) -> Union[tuple[dict[str, Any], ...], Any]:
         """
@@ -547,7 +490,6 @@ class BLMs:
                 self.sumdec_adc_mask_offset, self.sumdec_adc_mask_window,
                 self.init_sumdec_adc_mask_offset, self.init_sumdec_adc_mask_window
         )
-    #
     # ----------------------------------------------------------------------------------------------------------
     def restore_inits(self, mode: Literal["adc_counter_masks", "sumdec_adc_masks", "decimation", "settings"]) -> None:
         """
@@ -661,7 +603,6 @@ class BLMs:
             print(f"Invalid restore mode! No inits resotred.\nYour input -- > mode={mode}.")
 
         return None
-    #
     # ----------------------------------------------------------------------------------------------------------
     def inits_to_json(self, mode: Literal['all', 'adc_counter_masks', 'settings']):
         """
@@ -692,8 +633,9 @@ class BLMs:
         # Create save dir
         timestamp = datetime.datetime.now()
         timestamp_str = timestamp.strftime("%Y-%m-%d_%Hh%Mm%Ss")
-        inits_path = os.path.join('BLM_inits', timestamp_str)
-        os.makedirs(inits_path, exist_ok=True)
+        path = Path.cwd()
+        inits_path = path / 'BLM_inits' / timestamp_str
+        Path.mkdir(inits_path, parents=True, exist_ok=True)
 
         # Check state, cant restore inits if there are none
         conditions = [
@@ -702,13 +644,13 @@ class BLMs:
         ]
         if all(conditions):
             print("saving adc_counter_masks to json...")
-            with open(os.path.join(inits_path, 'init_adc_counter_offset_1.json'), 'w') as f:
+            with open(inits_path / 'init_adc_counter_offset_1.json', 'w') as f:
                 json.dump(self.init_adc_counter_offset_1, f)
-            with open(os.path.join(inits_path, 'init_adc_counter_window_1.json'), 'w') as f:
+            with open(inits_path / 'init_adc_counter_window_1.json', 'w') as f:
                 json.dump(self.init_adc_counter_window_1, f)
-            with open(os.path.join(inits_path, 'init_adc_counter_offset_2.json'), 'w') as f:
+            with open(inits_path / 'init_adc_counter_offset_2.json', 'w') as f:
                 json.dump(self.init_adc_counter_offset_2, f)
-            with open(os.path.join(inits_path, 'init_adc_counter_window_2.json'), 'w') as f:
+            with open(inits_path / 'init_adc_counter_window_2.json', 'w') as f:
                 json.dump(self.init_adc_counter_window_2, f)
         elif not any([self._got_init_adc_counter_masks, self._got_sector11]):
             warnings.warn("Asked to write blm adc counter masks to json, but no inits loaded.")
@@ -720,21 +662,20 @@ class BLMs:
         ]
         if all(conditions):
             print("saving blm settings to json...")
-            with open(os.path.join(inits_path, 'init_mode.json'), 'w') as f:
+            with open(inits_path / 'init_mode.json', 'w') as f:
                 json.dump(self.init_mode, f)
-            with open(os.path.join(inits_path, 'init_Vgc.json'), 'w') as f:
+            with open(inits_path / 'init_Vgc.json', 'w') as f:
                 json.dump(self.init_Vgc, f)
-            with open(os.path.join(inits_path, 'init_att.json'), 'w') as f:
+            with open(inits_path / 'init_att.json', 'w') as f:
                 json.dump(self.init_att, f)
-            with open(os.path.join(inits_path, 'init_decay_Vgc.json'), 'w') as f:
+            with open(inits_path / 'init_decay_Vgc.json', 'w') as f:
                 json.dump(self.init_decay_Vgc, f)
-            with open(os.path.join(inits_path, 'init_decay_att.json'), 'w') as f:
+            with open(inits_path / 'init_decay_att.json', 'w') as f:
                 json.dump(self.init_decay_att, f)
         elif not any([self._got_init_adc_counter_masks, self._got_sector11]):
             warnings.warn("Asked to write blm settings to json, but no inits loaded.")
 
         return print("All loaded inits written to JSON!")
-    #
     # ----------------------------------------------------------------------------------------------------------
     def restore_from_json(self, mode: Literal['all', 'adc_counter_masks', 'settings'], path='BLM_defaults'):
         """
@@ -854,7 +795,6 @@ class BLMs:
                 print(traceback.format_exc())
 
         return print("BLM Settings restored from JSON!")
-    #
     # ----------------------------------------------------------------------------------------------------------
     def restore_defaults(self, mode: Literal['all', 'adc_counter_masks', 'settings']):
         """

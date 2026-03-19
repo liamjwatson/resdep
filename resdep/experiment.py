@@ -1,10 +1,12 @@
 from typing import Union, Any
 import logging
 import traceback
+import warnings
 import epics
 import time
 import datetime
 import os
+from pathlib import Path
 import json
 import matplotlib.pyplot as plt
 import numpy as np
@@ -45,7 +47,7 @@ class ResonantDepolarisation():
 
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	#
-	def __init__(self, *, progress_callback=None, plot_callback=None, status_callback=None, data_path_callback=None, timer_callback=None) -> None:
+	def __init__(self, *, progress_callback=None, plot_callback=None, status_callback=None, data_path_callback=None, timer_callback=None, ADC_windows_callback=None) -> None:
 		
 		# --- init callbacks for Qt functionality
 		self.progress_callback = progress_callback or (lambda *args, **kwargs: None)
@@ -53,6 +55,7 @@ class ResonantDepolarisation():
 		self.status_callback = status_callback or (lambda *args, **kwargs: None)
 		self.data_path_callback = data_path_callback or (lambda *args, **kwargs: None)
 		self.timer_callback = timer_callback or (lambda *args, **kwargs: None)
+		self.ADC_windows_callback = ADC_windows_callback or (lambda *args, **kwargs: None)
 		self._abort_requested = False
 
 		# --- init states
@@ -127,10 +130,12 @@ class ResonantDepolarisation():
 		try:
 			if self.status_callback:
 				self.status_callback("Status: Setting up PVs...")
+
 			# --- start-up
 			self.calcf_revfromMasterRF()
 			self.calculate_range()
 			self.load_PVs()
+			self.calculate_adc_counter_windows()
 			self.config_save_files()
 
 			# --- update decimation
@@ -293,7 +298,6 @@ class ResonantDepolarisation():
 			print('Done everything :)')
 
 		return None
-	
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def calculate_range(self, ) -> None:
 
@@ -321,7 +325,6 @@ class ResonantDepolarisation():
 		# print('Estimated sweep time {0}'.format(time.strftime('%H:%M"%S', time.gmtime(self.sweep_time))))
 
 		return None
-
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def load_PVs(self, ) -> None:
 		# --- BLMs 
@@ -516,7 +519,6 @@ class ResonantDepolarisation():
 				value_dict[key] = pv.value
 
 		return None
-	
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def config_save_files(self, ) -> None:
 
@@ -525,15 +527,15 @@ class ResonantDepolarisation():
 		date_str 	= start_time.strftime("%Y-%m-%d")
 		hours_str 	= start_time.strftime("%H%Mh")
 		seconds_str = start_time.strftime("%Ss")
-		current_path = os.getcwd()
-		parent_path = os.path.dirname(current_path)
+		current_path = Path.cwd()
+		parent_path = current_path.parent
+		self.data_path = current_path / "data" / "resdep" / date_str / hours_str
 		try:
-			os.makedirs(os.path.join(parent_path, "data", "resdep", date_str, hours_str), exist_ok=False)
-			self.data_path = os.path.join(parent_path, "data", "resdep", date_str, hours_str)
-		except OSError: 
+			Path.mkdir(self.data_path, parents=True, exist_ok=False)
+		except FileExistsError: 
 			# if you run the script again in the same minute, it appends seconds to the path name
-			os.makedirs(os.path.join(parent_path, "data", "resdep", date_str, hours_str, seconds_str))
-			self.data_path = os.path.join(parent_path, "data", "resdep", date_str, hours_str, seconds_str)
+			self.data_path = self.data_path / seconds_str
+			Path.mkdir(self.data_path, parents=True)
 
 		if self.data_path_callback:
 			self.data_path_callback(self.data_path)
@@ -546,7 +548,7 @@ class ResonantDepolarisation():
 			# Create a formatter to define the log format
 			formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 			# Create a file handler to write logs to a file
-			file_handler = logging.FileHandler(os.path.join(self.data_path, "logfile.log"))
+			file_handler = logging.FileHandler(self.data_path / "logfile.log")
 			file_handler.setLevel(logging.DEBUG)
 			file_handler.setFormatter(formatter)
 			# Create a stream handler to print logs to the console
@@ -599,7 +601,6 @@ class ResonantDepolarisation():
 			"start time"			: start_time.strftime("%Y-%m-%d %H:%M:%S"),
 			"projected end time"	: self.projected_end_time.strftime("%Y-%m-%d %H:%M:%S")
 		}
-
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def fast_log_data(self, ) -> None:
 		"""
@@ -634,7 +635,6 @@ class ResonantDepolarisation():
 			logging.error(traceback.format_exc())
 
 		return None
-
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def slow_log_data(self, ) -> None:
 		"""
@@ -659,7 +659,6 @@ class ResonantDepolarisation():
 			logging.error(traceback.format_exc())
 
 		return None
-	
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def calcf_revfromMasterRF(self, ) -> None:
 		"""
@@ -677,7 +676,6 @@ class ResonantDepolarisation():
 		if masterRFact is not None:
 			self.f_rev: float = 1e-3 * masterRFact/360 	# kHz 
 		return None
-	
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def interruptible_sleep(self, seconds: int) -> bool:
 		"""
@@ -691,148 +689,142 @@ class ResonantDepolarisation():
 			time.sleep(0.01)
 		
 		return False
-	
 	# ------------------------------------------------------------------------------------------------------------------------------------------------------------------
-	def calculate_adc_counter_windows(self, ):#sector: str, method: Literal["loss_minimum", "integrated_half"] = "loss_minimum") -> None:
+	def calculate_adc_counter_windows(self, sector: int = 8) -> None:
 		"""
 		Calculates the offsets and window lengths of the two counter windows for a specific sector \\
 		**Note**: this only works for one sector, since there is no way to make the ADC windows wrap around T0. \\
 		Thus, the 'half' of the beam that the ADC windows capture informs the bunches that should be depolarised by the BbB, \\
 		and said half is unlikely to line up with the bunch numbers (*i.e.* unlikely to be bunches 1--180). \\
-		For now, uses the bend as the reference, but could in the future average the windows between the straight and the bend.
 		\\
-		Due to the restrictions of the windows to T0 and the phase shifting of the fill pattern as a function of sector, the calculations \\
-		of charge equavlent windows are a little tricky to think about. There are basically two different conditions:
-		1. The fill pattern is centred:
+		Regardless of the shape / phase of the fill pattern seen by the BLM:
+		
+			||   _____________   || 	 ||__________      __||      ||__      __________||       ||_______      _______||
+			||  |             |  ||  OR	 ||          |    |  ||  OR  ||  |    |          ||   OR  ||       |    |       ||
+			||__|             |__|| 	 ||          |____|  ||      ||  |____|          ||       ||       |____|       ||
 
-			||   _____________   ||
-			||  |             |  ||
-			||__|             |__||
+		we can simply integrate the fill pattern from the left until we reach exactly half of the area under the curve \\
+		to split the beam into two *charge equivalent* halves. ADC windows can be calculated directly from the point which \\
+		divides the beam into the charge eqivalent halves.
+		
+		From there, we can calculate the time / phase difference between the BLM and BbB system and calculate the bunches \\
+		to be depolarised. Alignment is done by finding the minima of the fill pattern seen by each system and shifting \\
+		the BbB by the difference between them.
 
-		in which case, the windows should just be from each edge to the centre (simple). \\
-		OR,
-
-		2. The fill pattern is not centred:
-
-			||__________      __||      ||__      __________||       ||_______      _______||
-			||          |    |  ||  OR  ||  |    |          ||   OR  ||       |    |       ||
-			||          |____|  ||      ||  |____|          ||       ||       |____|       ||
-
-		in which case, the length of the windows depends on which side the empty buckets lie.
-
-		To calculate if the pattern is in the centre, we can determine the edges of the fill pattern from the loss minumum. \\
-		We will call these the start and end, to not confuse left and right when considering the phase shift of the fill pattern.
-
-		The pattern is in the centre if, in reference to the mid point of the empty buckets, either the start or end of the fill pattern \\
-		exceeds the bounds of SUM_DEC. You can think of this as the reciprocal lattice tranlation vector G for Brillouin zones. \\
-		So we can match this case against where the start and end are calculated as within the bounds of SUM_DEC (not centred) 
-
-		We require exactly 150 *filled* buckets on each side (in each window). For the centred case (1), we simply move the diving line \\
-		with the midpoint of the fill pattern so that is split 150:150 every time, no matter the distribution of the empty buckets. \\
-		Note that the centre of the fill pattern is just the pi/2 phase shift of the minimum.
-
-		For the non-centred case (2), there are two sub-cases. The first, where the empty buckets are fully enclosed in one of the windows, \\
-		and the *special* case, where the empty buckets are centred and exactly split the fill pattern 150:150. In the special case, the diving line \\
-		can be anywhere in the centre unfilled 60. When it's not in the centre, there will be less than 150 filled buckets on one side, \\
-		and so the line will be locked at 180 +- 30 to keep the split even. These two non-centred cases can be combined since the line can be anywhere \\
-		in the empty buckets for the special case, which includes 180 +- 30.
-
-		Updates (class scope)
-		-------
-		calculated_adc_counter_windows : list[int]
+		Attributes
+		----------
+		[set_adc_counter_offset_1, ...] <- calculated_adc_counter_windows : list[int]
 			list containing counters 1 & 2 window and offset settings for the given sector \\
-			Values are a list of [offset_1, window_1, offset_2, window_2]
+			Values are a list of `[offset_1, window_1, offset_2, window_2]`
 
-		depolarised_bunches : list[int]
-			list containing the start:stop range of bunches to be depolarised using the BbB
+		set_drive_pattern <- depolarised_bunches : str
+			list containing the start:stop range of bunches to be depolarised using the BbB \\
 			This is basically a conversion from the ADC cycles (window length and pos) to bunch number
 		"""
+		SUM_DEC 			= 86
+		buckets_per_cycle 	= 360/SUM_DEC
+		replicated_fill_pattern: npt.NDArray[np.floating]
 
-		# global calculated_adc_counter_windows, depolarised_bunches, adc_cycle_at_loss_min, bucket_at_loss_min, FPM_Y_minimum_bucket, depolarised_bunch_start, depolarised_bunch_end
-		# global calculated_adc_counter_windows, depolarised_bunch_start, depolarised_bunch_end
+		try:
+			print("Time aligning BLM ADC windows and BbB system...")
 
+			# --- BLM ---
+			replicated_fill_pattern = self.blm.integrated_buffer_loss[f"{sector}B"].get() 
 
-		# dividing_line = 0
-
-		# try:
-			
-		# 	loss_minimum 			: float = np.min(replicated_fill_pattern[f"{sector}B"][:,1])
-		# 	adc_cycle_at_loss_min_index 	= np.where(replicated_fill_pattern[f"{sector}B"][:,1] == loss_minimum)[0].tolist()[0]
-		# 	adc_cycle_at_loss_min 		 	= int(replicated_fill_pattern[f"{sector}B"][adc_cycle_at_loss_min_index,0])
-		# 	bucket_at_loss_min  			= int(adc_cycle_at_loss_min*buckets_per_cycle)
-
-		# 	print(f"ADC cycle at loss minimum = {adc_cycle_at_loss_min}")
-		# 	print(f"bucket at loss minimum = {bucket_at_loss_min}")
-
-
-		# 	if method == "loss_minimum":
-		# 		print("# --- Mode: loss minimum --- #")
-		# 		# case (0): minimum (offset) is not captured due to finite window size
-		# 		if (adc_cycle_at_loss_min  == window_centre) or (adc_cycle_at_loss_min == (SUM_DEC - window_centre - 1)):
-		# 			# Here, the loss minimum is not captured, but I don't know if I can really do anything about it
-		# 			# I think the best course of action would be to assume that the fill pattern is perfectly centred
-		# 			# That way, the determination is at best window_centre/2 cycles out, not otherwise at max window_centre cycles.
-		# 			dividing_line = SUM_DEC//2
-
-		# 		# case (1): centred fill pattern
-		# 		elif (adc_cycle_at_loss_min <= 30*cycles_per_bucket) or (adc_cycle_at_loss_min >= 330*cycles_per_bucket):
-		# 			# dividing line is the centre of the fill pattern = loss min phase flipped pi/2
-		# 			dividing_line: int = int(np.abs(adc_cycle_at_loss_min - 180*cycles_per_bucket))
-				
-		# 		# case (2): Empty buckets are on the left: 
-		# 		elif (adc_cycle_at_loss_min <= 150*cycles_per_bucket):
-		# 			# see notes above
-		# 			dividing_line: int = int(210*cycles_per_bucket)
-
-		# 		# case (3): Empty buckets are on the right:
-		# 		elif (adc_cycle_at_loss_min > 150*cycles_per_bucket):
-		# 			# see notes above
-		# 			dividing_line: int = int(150*cycles_per_bucket)
-				
-		# 	elif method == "integrated_half":
-		# 		print("# --- Mode: integrated half --- #")
-		# 		# integrate loss
-		# 		integrated_loss = np.sum(replicated_fill_pattern[f"{sector}B"][:,1])
-		# 		cumulative_loss = np.cumsum(replicated_fill_pattern[f"{sector}B"][:,1])
-				
-		# 		# weighted left half
-		# 		dividing_line = np.where(cumulative_loss < integrated_loss//2)[0].tolist()[-1]
-			
-		# 	else:
-		# 		ValueError("Incorred mode.")
-
-		# 	# --- calculations 
-		# 	# format: [offset_1, window_1, offset_2, window_2]
-		# 	calculated_adc_counter_windows = [0, dividing_line, dividing_line, (SUM_DEC - dividing_line)]
-		# 	bucket_offset_1, bucket_window_1, bucket_offset_2, bucket_window_2 = [int(buckets_per_cycle*adc_cycle) for adc_cycle in calculated_adc_counter_windows]
-
-		# 	# FPM_Y minimum
-		# 	FPM_Y_minimum_bucket = int(buckets[np.where(FPM_Y_original == np.min(FPM_Y_original))[0].tolist()[0]])
-		# 	print(f"FPM_Y min bucket = {FPM_Y_minimum_bucket}")
+			if len(replicated_fill_pattern) < SUM_DEC:
+				warnings.warn(
+					f"BLM integrated buffer loss is returning {len(replicated_fill_pattern)} elements, not 86.\n"
+					f"To fix, ssh into root@sr{sector:02d}ioc91:\n"
+					"root@libera:~# rw\n"
+					"root@libera:~# nano /opt/libera-ioc/db/blm_monitor.db\n" 
+					"find the ADC integrated signal: (ctrl+W \"adc_integrated\"):\n"
+					"\"record(liberaSignal, \"$(P):signals:adc_integrated\") .... \"\n"
+					"change field(NGRP, 16) to (NGRP, 86) and save the file\n"
+					"root@libera:~# ro\n"
+					"root@libera:~# /opt/etc/init.d/S80libera-ioc restart"
+				)
+				return None
 		
-		# 	bucket_offset_1 += int(FPM_Y_minimum_bucket - bucket_at_loss_min)
-		# 	bucket_offset_2 += int(FPM_Y_minimum_bucket - bucket_at_loss_min)
-		# 	# After aligning the empty buckets, are the starts of the windows within 1:360?
-		# 	# If not, loop in circular buffer.
-		# 	if (bucket_offset_1 < 1) or (bucket_offset_1 > 360):
-		# 		bucket_offset_1 = (bucket_offset_1 - 1) % 360 + 1
-		# 	if (bucket_offset_2 < 1) or (bucket_offset_2 > 360):
-		# 		bucket_offset_2 = (bucket_offset_2 - 1) % 360 + 1
+			# integrated buffer is updside down, need to normalise 
+			replicated_fill_pattern = replicated_fill_pattern/np.max(replicated_fill_pattern)
+			# and flip
+			replicated_fill_pattern = -1 * replicated_fill_pattern + 1
+			# finally smooth
+			replicated_fill_pattern = gaussian_filter1d(replicated_fill_pattern, sigma = 3)
 
-		# 	# The start of one window is the end of the other.
-		# 	depolarised_bunch_start = bucket_offset_1
-		# 	depolarised_bunch_end 	= bucket_offset_2-1
-		# 	depolarised_bunches = f"{depolarised_bunch_start}:{depolarised_bunch_end}"
+			adc_cycle_at_loss_min 	= np.argmin(replicated_fill_pattern) + 1
+			bucket_at_loss_min  	= int(adc_cycle_at_loss_min*buckets_per_cycle)
+			print(f"ADC cycle at loss minimum = {adc_cycle_at_loss_min}")
+			print(f"bucket at loss minimum = {bucket_at_loss_min}")
 
-		# 	print("Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]")
-		# 	print(calculated_adc_counter_windows)
-		# 	print("Corresponding depolarised bunches for BbB:")
-		# 	print(depolarised_bunches)
+			integrated_loss = np.sum(replicated_fill_pattern)
+			cumulative_loss = np.cumsum(replicated_fill_pattern)
+			dividing_line 	= int(np.flatnonzero(cumulative_loss < integrated_loss/2)[-1]) + 1
+			# format: [offset_1, window_1, offset_2, window_2]
+			calculated_adc_counter_windows: list[int] = [0, dividing_line, dividing_line, (SUM_DEC - dividing_line)]
+			bucket_offset_1, bucket_window_1, bucket_offset_2, bucket_window_2 = [buckets_per_cycle*adc_cycle for adc_cycle in calculated_adc_counter_windows]
+			
+			# --- FPM ---
+			FPM_Y_PV 							= epics.pv.get_pv("SR00BBB01FPM02:FILL_PATTERN_ABS_WAVEFORM_MONITOR", connect=True)
+			bucket_shift_Y_PV 					= epics.pv.get_pv("SR00BBB01FPM02:BUCKET_SHIFT_SP", connect=True)
+			bucket_shift_Y: Union[int, None]	= bucket_shift_Y_PV.get() # int
+			FPM_Y_shifted				 	 	= FPM_Y_PV.get()
+			FPM_Y_original: list[float] 		= []
+			time.sleep(0.5)
+			# convert FPM_Y to list
+			if FPM_Y_shifted is not None:
+				FPM_Y_shifted = FPM_Y_shifted.tolist()
+			else:
+				warnings.warn("Fill pattern monitor PV returned None. Depolarised bunch calculations failed.")
+				return None
+			
+			# calculate original FPM (unshifted). 
+			# This involves poping the last index to the front n times.
+			if bucket_shift_Y is not None:
+				FPM_Y_original = FPM_Y_shifted
+				for i in range(bucket_shift_Y):
+					FPM_Y_original.insert(0, FPM_Y_original.pop(-1))
+			else:
+				warnings.warn("Bucket shift (Y) PV not accessed. Depolarised bunch calculations failed.")
 
-		# except Exception:
-		# 	logging.error(traceback.format_exc())
+			# FPM_Y minimum
+			FPM_Y_minimum_bucket = np.argmin(FPM_Y_original) + 1
+			print(f"FPM_Y min bucket = {FPM_Y_minimum_bucket}")
+			# Shift the calculated depolarised bunches by the time offset between the BLM and BbB system (given by the difference in the min bucket)
+			bucket_offset_1 = int(bucket_offset_1 + FPM_Y_minimum_bucket - bucket_at_loss_min)
+			bucket_offset_2 = int(bucket_offset_2 + FPM_Y_minimum_bucket - bucket_at_loss_min)
+			# After aligning the empty buckets, are the starts of the windows within 1:360?
+			# If not, loop in circular buffer.
+			if (bucket_offset_1 < 1) or (bucket_offset_1 > 360):
+				bucket_offset_1 = (bucket_offset_1 - 1) % 360 + 1
+			if (bucket_offset_2 < 1) or (bucket_offset_2 > 360):
+				bucket_offset_2 = (bucket_offset_2 - 1) % 360 + 1
+
+			# The start of one window is the end of the other.
+			depolarised_bunch_start 	= bucket_offset_1 
+			depolarised_bunch_end 		= bucket_offset_2-1
+			depolarised_bunches: str 	= f"{depolarised_bunch_start}:{depolarised_bunch_end}"
+			
+			# update experiment settings
+			self.set_drive_pattern = depolarised_bunches
+			(self.set_adc_counter_offset_1,
+			 self.set_adc_counter_window_1,
+			 self.set_adc_counter_offset_2,
+			 self.set_adc_counter_window_2) = calculated_adc_counter_windows
+			
+			# update GUI
+			if self.ADC_windows_callback:
+				self.ADC_windows_callback(calculated_adc_counter_windows, depolarised_bunches)
+
+
+			print("Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]")
+			print(calculated_adc_counter_windows)
+			print("Corresponding depolarised bunches for BbB:")
+			print(depolarised_bunches)
+
+		except Exception:
+			logging.error(traceback.format_exc())
 		
-
 		return None
 
 	# *--------------------------------* #
@@ -867,7 +859,7 @@ class ResonantDepolarisation():
 		try:
 			for inj_time in injections_np:
 				# find index in dataset that matches (just before) injection time
-				index = np.where([inj_time < timestamps_np])[0].tolist()[-1]
+				index = np.flatnonzero([inj_time < timestamps_np])[-1]
 				# Make sure there is sufficient data available to average
 				if (index == 0) or (index == last_index):
 					# ignore injections at very start or end
@@ -908,7 +900,6 @@ class ResonantDepolarisation():
 			
 
 		return None
-
 	# --------------------------------------------------------------------------------------------------------------------
 	def save_data(self, ) -> None:
 		"""
@@ -925,55 +916,55 @@ class ResonantDepolarisation():
 			del self.metadata['projected end time']
 			end_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 			self.metadata.update({'end time': end_time, 'Last sweep frequency': self.set_sweep_freq})
-			with open(os.path.join(self.data_path, 'metadata.json'), 'w') as f:
+			with open(self.data_path / 'metadata.json', 'w') as f:
 				json.dump(self.metadata, f)
 			
 			# freqs as txt
-			with open(os.path.join(self.data_path, 'freqs.txt'), 'w') as f:
+			with open(self.data_path / 'freqs.txt', 'w') as f:
 					for value in self.freqs:
 						f.write(str(value) + '\n')
-			with open(os.path.join(self.data_path, 'set_freqs.txt'), 'w') as f:
+			with open(self.data_path / 'set_freqs.txt', 'w') as f:
 					for value in self.set_freqs:
 						f.write(str(value) + '\n')
 			
 			# current as txt
-			with open(os.path.join(self.data_path, 'current.txt'), 'w') as f:
+			with open(self.data_path / 'current.txt', 'w') as f:
 					for value in self.current:
 						f.write(str(value) + '\n')
 
 			# timestamps as txt
-			with open(os.path.join(self.data_path, 'timestamps.txt'), 'w') as f:
+			with open(self.data_path / 'timestamps.txt', 'w') as f:
 					for value in self.timestamps_str:
 						f.write(value + '\n')
 
 			# adc counter loss 1
-			with open(os.path.join(self.data_path, 'adc_counter_loss_1.json'), 'w') as f:
+			with open(self.data_path / 'adc_counter_loss_1.json', 'w') as f:
 				json.dump(self.beam_loss_window_1, f)
 			# adc counter loss 2
-			with open(os.path.join(self.data_path, 'adc_counter_loss_2.json'), 'w') as f:
+			with open(self.data_path / 'adc_counter_loss_2.json', 'w') as f:
 				json.dump(self.beam_loss_window_2, f)
 
 			# ODB size and offset
-			with open(os.path.join(self.data_path, 'ODB_data.json'), "w") as f:
+			with open(self.data_path / 'ODB_data.json', "w") as f:
 				json.dump(self.ODB_data, f)
 
 			# injection timestamps as txt
-			with open(os.path.join(self.data_path, 'injections.txt'), 'w') as f:
+			with open(self.data_path / 'injections.txt', 'w') as f:
 					for value in self.injections_str:
 						f.write(value + '\n')
 
 			# top up loss (if any)
-			with open(os.path.join(self.data_path, "top-up_loss_window_1.json"), "w") as f:
+			with open(self.data_path / "top-up_loss_window_1.json", "w") as f:
 				json.dump(self.top_up_loss_window_1, f)
-			with open(os.path.join(self.data_path, "top-up_loss_window_2.json"), "w") as f:
+			with open(self.data_path / "top-up_loss_window_2.json", "w") as f:
 				json.dump(self.top_up_loss_window_2, f)
 
 			# temperatures (will need a separate folder)
-			temperatures_path = os.path.join(self.data_path, "temperatures")
-			os.mkdir(temperatures_path)
+			temperatures_path = self.data_path / "temperatures"
+			Path.mkdir(temperatures_path)
 			# each dict as its own .json
 			for temperature_dict, save_file_name in zip(self.temperature_value_dicts, self.temperature_save_file_names):
-				with open(os.path.join(temperatures_path, save_file_name), "w") as f:
+				with open(temperatures_path / save_file_name, "w") as f:
 					json.dump(temperature_dict, f)
 
 		except Exception:
@@ -982,7 +973,6 @@ class ResonantDepolarisation():
 		print("\n Data saved!")
 
 		return None
-
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------	
 	def plot_data(self, ) -> None:
 		"""
@@ -1080,7 +1070,7 @@ class ResonantDepolarisation():
 				color="black"
 			)
 
-			plt.savefig(os.path.join(self.data_path, "ratio_loss.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+			plt.savefig(self.data_path / "ratio_loss.png", dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
 			print("Data plotted!")
 
@@ -1114,7 +1104,7 @@ class ResonantDepolarisation():
 			axs[1,0].set_ylabel(r"Y beam size ($\mu$m)")
 			axs[1,1].set_ylabel(r"Y beam offset ($\mu$m)")
 
-			plt.savefig(os.path.join(self.data_path, "ODB_size_and_offset.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+			plt.savefig(self.data_path / "ODB_size_and_offset.png", dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
 			plt.show()
 
@@ -1122,7 +1112,6 @@ class ResonantDepolarisation():
 			logging.error(traceback.format_exc())
 
 		return None
-
 	
 	# *--------------------------------* #
 	# *---------- PV callbacks --------* #
@@ -1146,7 +1135,6 @@ class ResonantDepolarisation():
 		except Exception:
 			logging.error(traceback.format_exc())
 
-
 	# *--------------------------------* #
 	# *---------- GUI Signals ---------* #
 	# *--------------------------------* #
@@ -1158,9 +1146,21 @@ class ResonantDepolarisation():
 		self._abort_requested = True
 		return None
 
-# ! write this
 if __name__ == "__main__":
 	print("resdep.py contains a class file ResonantDepolarisation which ideally should be instanced in a top-level script and not directly run.")
-	print("Direct execution under development.")
-	# ask user for init inputs
-	# call run_experiment()
+	response = input("Do you want to run it directly? (y/n): ")
+
+	if response == "y":
+		resdep = ResonantDepolarisation()
+		response = input("Use default settings? (y/n): ")
+
+		if response == "y":
+			print("#--- input experiment settings ---#")
+			resdep.set_kicker_amp		= float(input("Kicker amplitude (% as decimal, 0->1): \n"))
+			resdep.harmonic				= int(	input("Harmonic (int): \n"))
+			resdep.bounds				= float(input("Energy Bounds (% as decimal, typically 0.0005): \n"))
+			resdep.sweep_direction		= int(	input("Sweep direction (Forward == 1, backward == -1): \n"))
+			resdep.sweep_rate			= float(input("Sweep rate (0.5 -- 10 Hz/s): \n"))
+			resdep.sweep_step_size		= float(input("Sweep step size (lower limit = 0.5 Hz): \n"))
+
+		resdep.start_experiment()

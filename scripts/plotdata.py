@@ -31,7 +31,7 @@ e 			= 1.602176634e-19		# C
 current_path = os.getcwd()
 print(current_path)
 parent_path = os.path.dirname(current_path)
-data_path = "Z:\\usr\\personal\\watsonl\\data\\resdep\\2026-03-10\\2052h"
+data_path = "Z:\\usr\\personal\\watsonl\\resdep-master\\data\\resdep\\2026-03-02\\2150h"
 # data_path = os.path.join(parent_path, "data", "resdep", "2026-03-02", "2300h")
 # data_path = os.path.join(current_path, "data", "resdep", "2026-02-22", "1146h")
 # metadata json
@@ -212,6 +212,7 @@ def freq_calc(energy):
 # ------		Ratio Loss  	----- #
 # ----------------------------------- #
 
+# ! minus 1 from the data and do cumsum
 
 ratio_loss: dict[str, Any] = {}
 freqs_array = np.array(freqs)
@@ -225,13 +226,14 @@ for key in beam_loss_window_1:
 start = 0
 end = len(freqs_array)
 sigma = 10
-window_length = 801
+window_length = 1101
 do_fit = False
 sectors = ["1", "4", "8", "11", "12", "13"]
 # sectors = ["1", "8", "13"]
 
 fig, axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
 deriv_fig, deriv_axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
+cumsum_fig, cumsum_axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
 
 for sector in sectors:
 	# filter / bin
@@ -242,9 +244,15 @@ for sector in sectors:
 	bend *= 1/np.max(bend)
 	# differentiate
 	deriv_bend = savgol_filter(x=bend, window_length=window_length, polyorder=1, deriv=1)
+	deriv_bend_peak = np.argmax(deriv_bend)
+	# cumsum
+	bend_at_zero = bend - np.mean(bend[:200])
+	bend_cumsum = np.cumsum(bend_at_zero)
 	# plot
 	axs.plot(freqs_array[start:end], bend + 0.03 * float(sector), label=f"{sector}B")
 	deriv_axs.plot(freqs_array[start:end], deriv_bend + 6e-5 * float(sector), label=f"{sector}B")
+	deriv_axs.axvline(x=freqs_array[deriv_bend_peak], ymin=0, ymax=1, color='red')
+	cumsum_axs.plot(freqs_array[start:end], bend_cumsum, label=f"{sector}B")
 
 	if do_fit:
 		# do fit

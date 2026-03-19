@@ -111,20 +111,20 @@ class Mixin(HasValueProtocol):
             # plot baseline
             self.canvas.axes.axhline(y=fit[0] + 0.03 * float(sector), xmin=0, xmax=1, alpha=0.1, linestyle="--", color="black")
 
-            # shade 2*std.dev region on plot
-            if E0_mean and E0_stddev:
-                self.canvas.axes.axvspan(
-                    freq_calc(energy=float(E0_mean-E0_stddev), f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic), 
-                    freq_calc(energy=float(E0_mean+E0_stddev), f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic), 
-                    alpha=0.1, 
-                    color="black"
-                )
+        # shade 2*std.dev region on plot
+        if E0_mean and E0_stddev:
+            self.canvas.axes.axvspan(
+                freq_calc(energy=float(E0_mean-E0_stddev), f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic),
+                freq_calc(energy=float(E0_mean+E0_stddev), f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic),
+                alpha=0.1,
+                color="black"
+            )
 
-            # reset the plot limits
-            if xlims:
-                self.canvas.axes.set_xlim(xlims)
-            if ylims:
-                self.canvas.axes.set_ylim(ylims)
+        # reset the plot limits
+        if xlims:
+            self.canvas.axes.set_xlim(xlims)
+        if ylims:
+            self.canvas.axes.set_ylim(ylims)
 
         return None
 

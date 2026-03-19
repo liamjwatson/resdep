@@ -8,10 +8,11 @@ It would be nice to plot continuously but im not sure how to do that with top-up
 """
 
 import datetime
-from typing import Union, cast, Literal
+from typing import Any, Union, cast, Literal
 import sys
 import json
 import os
+from pathlib import Path
 import ntpath
 import posixpath
 import logging, traceback
@@ -61,6 +62,7 @@ from PySide6.QtGui import (
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_qt import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
+from matplotlib import rcParams
 
 # resdep
 from resdep.experiment import ResonantDepolarisation
@@ -86,7 +88,6 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         # perpetual GUI settings
         QCoreApplication.setOrganizationName("Physics")
         QCoreApplication.setApplicationName("Resonant Depolarisation")
-        self.read_GUI_settings()
 
         # --- Resonant Depolarisation module
         # import
@@ -102,20 +103,22 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.resdepQt.status.connect(self.on_status_update)
         self.resdepQt.data_path.connect(self.on_data_path_update)
         self.resdepQt.start_timer.connect(self.on_start_timer)
+        self.resdepQt.ADC_windows.connect(self.on_new_ADC_windows)
         self.resdepQt.finished.connect(self.on_finish)
 
         # init path
-        self.current_path = os.getcwd()
-        self.parent_path = os.path.dirname(self.current_path)
-        self.config_path = os.path.join(self.current_path, "config", "resdepGUI")
+        path = Path().cwd()
+        self.current_path = path
+        self.parent_path = path.parent
+        self.config_path = path / "config" / "resdepGUI"
 
         # init window
         self.setWindowTitle("Resonant Depolarisation")
         self.setMinimumWidth(400)
 
         # init icon
-        pixmapi = QStyle.StandardPixmap.SP_DirIcon
-        dir_icon = self.style().standardIcon(pixmapi)
+        dir_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        reset_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
 
         # create an layout for the whole window
         # ------------------------------------------- #
@@ -144,16 +147,16 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         settings_pane.setLayout(settings_layout)
 
         # define settings widgets
-        self.kicker_amp         = QSpinBox(minimum=0, maximum=100, value=0, suffix="%")
-        self.harmonic           = QSpinBox(minimum=0, maximum=15, value=0)
-        self.bounds             = QDoubleSpinBox(minimum=0.001, maximum=2, decimals=3, singleStep=0.001, value=0.05, suffix="%")
-        self.freq_shift         = QDoubleSpinBox(minimum=-10, maximum=10, decimals=3, singleStep=0.001, value=0, suffix=" KHz")
+        self.kicker_amp         = QSpinBox(minimum=0, maximum=100, suffix="%")
+        self.harmonic           = QSpinBox(minimum=0, maximum=15)
+        self.bounds             = QDoubleSpinBox(minimum=0.001, maximum=2,   decimals=3, singleStep=0.001, suffix="%")
+        self.freq_shift         = QDoubleSpinBox(minimum=-100,  maximum=100, decimals=3, singleStep=0.001, suffix=" KHz")
         self.sweep_direction    = QComboBox(self)
         self.sweep_direction.addItem("Forward")
         self.sweep_direction.addItem("Backward")
-        self.sweep_rate         = QDoubleSpinBox(minimum=0.1, maximum=10, decimals=1, singleStep=0.1, value=10, suffix=" Hz/s")
-        self.sweep_step_size    = QDoubleSpinBox(minimum=0.5, maximum=10, value=0.5, singleStep=0.5, decimals=1, suffix=" Hz")
-        self.drive_pattern      = QLineEdit("36:215")
+        self.sweep_rate         = QDoubleSpinBox(minimum=0.1, maximum=10, decimals=1, singleStep=0.1, suffix=" Hz/s")
+        self.sweep_step_size    = QDoubleSpinBox(minimum=0.5, maximum=10, decimals=1, singleStep=0.5, suffix=" Hz")
+        self.drive_pattern      = QLineEdit(text="36:215")
         self.drive_pattern.setMask("900:900")
         pattern_validator       = QRegularExpressionValidator(
             QRegularExpression(r"^(?:!|(?:[1-9]|[1-9]\d|[12]\d\d|3[0-5]\d|360):(?:[1-9]|[1-9]\d|[12]\d\d|3[0-5]\d|360))$"), 
@@ -174,36 +177,44 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         ADC_form_layout.addWidget(self.ADC_offset_2)
         ADC_form_layout.addWidget(self.ADC_window_2)
 
-        # add settings widgets to a list for loops (enabling/disabling)
-        self.settings_pane_widgets: list[QWidget] = [
-            self.kicker_amp,
-            self.harmonic,
-            self.bounds,
-            self.freq_shift,
-            self.sweep_direction,
-            self.sweep_rate,
-            self.sweep_step_size,
-            self.drive_pattern,
-            self.ADC_offset_1,
-            self.ADC_window_1,
-            self.ADC_offset_2,
-            self.ADC_window_2
-        ]
+        # add settings widgets to a dict for loops (enabling/disabling)
+        self.settings_pane_widgets: dict[str, QWidget] = {
+            "kicker_amp"        : self.kicker_amp,
+            "harmonic"          : self.harmonic,
+            "bounds"            : self.bounds,
+            "freq_shift"        : self.freq_shift,
+            "sweep_direction"   : self.sweep_direction,
+            "sweep_rate"        : self.sweep_rate,
+            "sweep_step_size"   : self.sweep_step_size,
+            "drive_pattern"     : self.drive_pattern,
+            "ADC_offset_1"      : self.ADC_offset_1,
+            "ADC_window_1"      : self.ADC_window_1,
+            "ADC_offset_2"      : self.ADC_offset_2,
+            "ADC_window_2"      : self.ADC_window_2
+        }
 
-        # timing labels (dwell, estimated, elapsed)
+        self.load_default_settings()
+
+        # timing labels (dwell, estimated, elapsed, repolarisation)
         self.dwell_time         = QLabel(f"{self.resdep.dwell_time:.2f} s")
         self.estimated_time     = QLabel(self.resdep.estimated_sweep_time)
         self.elapsed_time: int  = 0
         self.timer              = QTimer(self)
         self.timer.setInterval(1000) # update every 1 s
         self.elapsed_time_label  = QLabel("")
+        self.polarisation: float = 0
+        self.polarisation_label  = QLabel("")
+        self.repolarisation_time: int  = 0 # seconds. 3 tpol -> 39 minutes (88 %)
+        self.repolarisation_time_label = QLabel("")
+        self.repolarisation_timer = QTimer(self)
+        self.repolarisation_timer.setInterval(1000)
 
         # fit panel
         self.button_do_fit       = QPushButton("Do fit")
         self.button_do_fit.setEnabled(False)
         self.sigma               = QSpinBox(minimum=1, maximum=100, value=10)
         self.sigma.setEnabled(False)
-        
+
         # separate layout for sector checkboxes
         checkbox_pane            = QWidget(self)
         checkbox_layout          = QHBoxLayout()
@@ -214,6 +225,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         checkbox_layout.addWidget(QLabel("Sectors:"))
         for checkbox in self.sector_checkboxes:
             checkbox.setEnabled(False)
+            checkbox.setChecked(True)
             checkbox_layout.addWidget(checkbox)
         # fit results labels
         self.fitted_beam_energy_label = QLabel("")
@@ -234,6 +246,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.sweep_rate.valueChanged.connect(self.update_experiment_settings)
         self.sweep_step_size.valueChanged.connect(self.update_experiment_settings)
         self.timer.timeout.connect(self.update_elapsed_time)
+        self.repolarisation_timer.timeout.connect(self.update_repolarisation_time)
         self.button_do_fit.clicked.connect(self.do_fit)
         
         # add widgets to settings pane
@@ -249,6 +262,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         settings_layout.addRow("Dwell time:", self.dwell_time)
         settings_layout.addRow("Estimated sweep time:", self.estimated_time)
         settings_layout.addRow("Elapsed time:", self.elapsed_time_label)
+        settings_layout.addRow("Polarisation\n(minimum, estimate):", self.polarisation_label)
+        settings_layout.addRow("Repolarisation time:", self.repolarisation_time_label)
         settings_layout.addRow("", self.button_do_fit)
         settings_layout.addRow("sigma", self.sigma)
         settings_layout.addWidget(checkbox_pane)
@@ -267,39 +282,42 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         button_layout = QHBoxLayout()
         button_pane.setLayout(button_layout)
 
+        # load defaults
+        self.button_default_settings = QPushButton("Load defaults")
+        self.button_default_settings.setIcon(reset_icon)
+
         # load previous settings button (from last experiment)
-        self.button_load_run_settings = QPushButton("Load last run")
-        self.button_load_run_from_file = QPushButton("Load from file")
-        self.button_load_run_from_file.setIcon(dir_icon)
+        self.button_settings_from_file = QPushButton("Load from file")
+        self.button_settings_from_file.setIcon(dir_icon)
 
         # data directory button
-        self.button_open_data_path = QPushButton("Data path")
-        self.button_open_data_path.setIcon(dir_icon)
-        self.data_path = ""
+        self.button_data_path = QPushButton("Data path")
+        self.button_data_path.setIcon(dir_icon)
+        self.data_path = Path.cwd()
 
         # load finished experiment data button
-        self.button_load_finished_experiment_data = QPushButton("Load finished experiment data")
-        self.button_load_finished_experiment_data.setIcon(dir_icon)
+        self.button_finished_experiment_data = QPushButton("Load finished experiment data")
+        self.button_finished_experiment_data.setIcon(dir_icon)
 
         # run / abort buttons
         self.button_abort = QPushButton("Abort")
         self.button_run = QPushButton("Run")
         self.button_abort.setEnabled(False)
-        self.button_open_data_path.setEnabled(False)
+        self.button_data_path.setEnabled(False)
 
         # add callbacks for buttons
-        self.button_load_run_settings.clicked.connect(self.load_run_settings)
-        self.button_load_run_from_file.clicked.connect(self.load_run_from_file)
-        self.button_open_data_path.clicked.connect(self.open_data_path)
-        self.button_load_finished_experiment_data.clicked.connect(self.load_finished_experiment_data)
+        self.button_default_settings.clicked.connect(self.load_default_settings)
+        self.button_settings_from_file.clicked.connect(self.load_experiment_settings_from_json)
+        self.button_data_path.clicked.connect(self.open_data_path)
+        self.button_finished_experiment_data.clicked.connect(self.load_finished_experiment_data)
         self.button_run.clicked.connect(self.run_experiment)
         self.button_abort.clicked.connect(self.abort)
 
         # add buttons to layout
-        button_layout.addWidget(self.button_load_run_settings)
-        button_layout.addWidget(self.button_load_run_from_file)
-        button_layout.addWidget(self.button_open_data_path)
-        button_layout.addWidget(self.button_load_finished_experiment_data)
+        button_layout.addWidget(self.button_default_settings)
+        button_layout.addWidget(self.button_settings_from_file)
+        button_layout.addWidget(self.button_data_path)
+        button_layout.addWidget(self.button_finished_experiment_data)
         # spacer so run/abort buttons are flush right
         button_layout.addStretch()
         # change the spacing between the buttons, like an offset, which doesn't scale with the window
@@ -338,6 +356,9 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         full_layout.addWidget(button_pane)
         full_layout.addWidget(self.status_bar)
 
+        # read previous settings (if they exist)
+        self.read_GUI_settings()
+
         self.show()
 
     # *--------------------------------* #
@@ -357,9 +378,9 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.enable_GUI_pane(pane="settings", enable=False)
         # grey out run, load buttons
         self.button_run.setEnabled(False)
-        self.button_load_run_settings.setEnabled(False)
-        self.button_load_run_from_file.setEnabled(False)
-        self.button_load_finished_experiment_data.setEnabled(False)
+        self.button_default_settings.setEnabled(False)
+        self.button_settings_from_file.setEnabled(False)
+        self.button_finished_experiment_data.setEnabled(False)
         # enable abort button (and turn red)
         self.button_abort.setEnabled(True)
         self.button_abort.setStyleSheet("QPushButton {background-color: red;}")
@@ -396,13 +417,16 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.status_bar.showMessage(message)
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def on_data_path_update(self, data_path: str) -> None:
+    def on_data_path_update(self, data_path: Path) -> None:
         """
         Assign data path from resdep to GUI button 
         Spawn error logger
         """
         self.data_path = data_path
-        self.button_open_data_path.setEnabled(True)
+        self.button_data_path.setEnabled(True)
+
+        # update canvas save directory
+        rcParams["savefig.directory"] = data_path
 
         # --- logging to console and file
         # Create a logger
@@ -411,7 +435,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         # Create a formatter to define the log format
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         # Create a file handler to write logs to a file
-        file_handler = logging.FileHandler(os.path.join(data_path, "logfile.log"))
+        file_handler = logging.FileHandler(data_path / "logfile.log")
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         # Create a stream handler to print logs to the console
@@ -448,62 +472,132 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.progress_bar.setMaximum(100)
 
         # save settings to data path
-        self.save_experiment_settings(path=self.resdep.data_path)
+        self.save_experiment_settings_to_json(path=self.resdep.data_path)
 
         self.timer.stop()
-        self.elapsed_time_label.setText(f"Experiment completed in {self.elapsed_timedelta}")
+        try:
+            self.elapsed_time_label.setText(f"Experiment completed in {self.elapsed_timedelta}")
+        except AttributeError:
+            pass
+
+        self.repolarisation_timer.start()
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def on_start_timer(self, ) -> None:
         self.timer.start()
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def update_elapsed_time(self, ) -> None:
+    def on_new_ADC_windows(self, ADC_windows: list[int], depolarised_bunches: str) -> None:
+        """
+        Update GUI with new values after time aligning the BLM ADC windows and BbB system
+        """
+        self.ADC_offset_1.setValue(ADC_windows[0])
+        self.ADC_window_1.setValue(ADC_windows[1])
+        self.ADC_offset_2.setValue(ADC_windows[2])
+        self.ADC_window_2.setValue(ADC_windows[3])
+
+        self.drive_pattern.setText(depolarised_bunches)
+
+        return None
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def update_elapsed_time(self, ) -> None: 
+        """
+        Add one second to elapsed time and update QLabel
+        """
         self.elapsed_time += 1
         self.elapsed_timedelta = datetime.timedelta(seconds=self.elapsed_time)
         self.elapsed_time_label.setText(f"{self.elapsed_timedelta}")
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def read_GUI_settings(self,) -> None:
+    def update_repolarisation_time(self, ) -> None:
+        """
+        Calculate time spent repolarising the beam after experiment end. \\ 
+        Ideal wait time: (3 tpol, 39 min, 88%) \\ 
+        Calculate estimate of polarisation (assuming fully depolarised at the end of the experiment) \\
+        Stop after enough time (~2 hours)
+        """
+        self.repolarisation_time += 1
+        repolarisation_timedelta = datetime.timedelta(seconds=self.repolarisation_time)
+        self.repolarisation_time_label.setText(f"{repolarisation_timedelta}")
+
+        self.polarisation = 92.38*(1-np.exp(-self.repolarisation_time/779))
+        self.polarisation_label.setText(f"{self.polarisation:0.2f}%")
+
+        if self.repolarisation_time >= 779*10:
+            self.repolarisation_timer.stop()
+
+        return None
+    
+    # *--------------------------------* #
+	# *------ Settings Callbacks ------* #
+	# *--------------------------------* #
+    def save_GUI_settings(self, ) -> None:
+
+        self.GUI_settings = QSettings()
+
+        self.GUI_settings.setValue("window_pos", self.pos())
+        self.GUI_settings.setValue("window_size", self.size())
+
+        for key, widget in self.settings_pane_widgets.items():
+            if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                self.GUI_settings.setValue(key, widget.value())
+            elif isinstance(widget, QComboBox):
+                self.GUI_settings.setValue(key, widget.currentText())
+            elif isinstance(widget, QLineEdit):
+                self.GUI_settings.setValue(key, widget.text())
+
+        return None
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def read_GUI_settings(self, ) -> None:
         """
         Reads and applies GUI settings / config using `QSettings`. \\
         Compatible for using resdep as a module, stores settings in OS specific system directories (*e.g.* `etc\\`, registry) 
         """
         self.GUI_settings = QSettings()
 
-        window_pos = self.GUI_settings.value("window_pos", defaultValue=QPoint(50, 50))
-        window_size = self.GUI_settings.value("window_size", defaultValue=QSize(400, 400))
+        window_pos = self.GUI_settings.value("window_pos")
+        window_size = self.GUI_settings.value("window_size")
         if isinstance(window_pos, QPoint):
             self.move(window_pos)
         if isinstance(window_size, QSize):
             self.resize(window_size)
 
+        for key, widget in self.settings_pane_widgets.items():
+            value: Any = self.GUI_settings.value(key, defaultValue=None) # should be type: int | float | str
+            if value is None:
+                continue
+            try:
+                if isinstance(widget, QSpinBox):
+                    widget.setValue(int(value))
+                if isinstance(widget, QDoubleSpinBox):
+                    widget.setValue(float(value)) # for some reason, QDoubleSpinBox saves in QSettings as str, not float.
+                elif isinstance(widget, QComboBox):
+                    widget.setCurrentText(str(value))
+                elif isinstance(widget, QLineEdit):
+                    widget.setText(str(value))
+            except Exception:
+                logging.error(traceback.format_exc())
+
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def save_experiment_settings(self, path = None) -> None:
+    def save_experiment_settings_to_json(self, path: Union[Path, None] = None) -> None:
 
         try:
             # add to dict
-            settings_pane_config: dict[str, Union[str, int, float]] = {
-            "kicker_amp"        : self.kicker_amp.value(),
-            "harmonic"          : self.harmonic.value(),
-            "bounds"            : self.bounds.value(),
-            "freq_shift"        : self.freq_shift.value(),
-            "sweep_direction"   : self.sweep_direction.currentText(),
-            "sweep_rate"        : self.sweep_rate.value(),
-            "sweep_step_size"   : self.sweep_step_size.value(),
-            "drive_pattern"     : self.drive_pattern.text(),
-            "ADC_offset_1"      : self.ADC_offset_1.value(),
-            "ADC_window_1"      : self.ADC_window_1.value(),
-            "ADC_offset_2"      : self.ADC_offset_2.value(),
-            "ADC_window_2"      : self.ADC_window_2.value()
-            }
+            settings_pane_config: dict[str, Union[str, int, float]] = {}
+            for key, widget in self.settings_pane_widgets.items():
+                if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                    settings_pane_config[key] = widget.value()
+                elif isinstance(widget, QComboBox):
+                    settings_pane_config[key] = widget.currentText()
+                elif isinstance(widget, QLineEdit):
+                    settings_pane_config[key] = widget.text()
 
             # save to file
             if not path:
                 path = self.config_path
-            with open(os.path.join(path, "settings_pane.json"), "w") as f:
+            with open(path / "settings_pane.json", "w") as f:
                 json.dump(settings_pane_config, f)
 
         except Exception:
@@ -514,17 +608,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
             "Failed to save experiment settings?."
             )
 
-        # new: using QSettings
-        self.GUI_settings = QSettings()
-        self.GUI_settings.setValue("window_pos", self.pos())
-        self.GUI_settings.setValue("window_size", self.size())
-
         return None
-    
-    
-    # *--------------------------------* #
-	# *------ Settings Callbacks ------* #
-	# *--------------------------------* #
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def update_experiment_settings(self) -> None:
         """
@@ -584,6 +668,68 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
     # *--------------------------------* #
 	# *------ Button Callbacks --------* #
 	# *--------------------------------* #
+    def load_default_settings(self, ) -> None:
+
+        default_values: dict[str, Any] = {
+            "kicker_amp"        : 0,
+            "harmonic"          : 1,
+            "bounds"            : 0.05,
+            "freq_shift"        : 0,
+            "sweep_direction"   : "Forward",
+            "sweep_rate"        : 10,
+            "sweep_step_size"   : 0.5,
+            "drive_pattern"     : "36:215",
+            "ADC_offset_1"      : 0,
+            "ADC_window_1"      : 42,
+            "ADC_offset_2"      : 42,
+            "ADC_window_2"      : 44
+        }
+
+        for key, widget in self.settings_pane_widgets.items():
+            try:
+                if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                    widget.setValue(default_values[key])
+                elif isinstance(widget, QComboBox):
+                    widget.setCurrentText(default_values[key])
+                elif isinstance(widget, QLineEdit):
+                    widget.setText(default_values[key])
+            
+            except Exception:
+                logging.error(traceback.format_exc())
+
+        return None
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def load_experiment_settings_from_json(self,) -> None:
+        """
+        load experiment settings config (loads into settings pane) - spawns file dialog window
+        """
+        filename, _ = QFileDialog.getOpenFileName(
+            dir="Data", 
+            filter="All Files (*);; JSON (*.json);; settings config (settings_pane.json)", 
+            selectedFilter="settings config (settings_pane.json)"
+            )
+
+        if len(filename) > 0:
+            self.status_bar.showMessage("Status: loading...")
+            
+            with open(Path(filename), "r") as f:
+                settings_pane_config = json.load(f)
+
+            for key, widget in self.settings_pane_widgets.items():
+                try:
+                    if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                        widget.setValue(settings_pane_config[key])
+                    elif isinstance(widget, QComboBox):
+                        widget.setCurrentText(settings_pane_config[key])
+                    elif isinstance(widget, QLineEdit):
+                        widget.setText(settings_pane_config[key])
+                
+                except Exception:
+                    logging.error(traceback.format_exc())
+
+            self.status_bar.showMessage("Status: Ready")
+        
+        return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def open_data_path(self, ) -> None:
         """
@@ -601,69 +747,12 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def load_run_settings(self, path = None) -> None:
-        """
-        Overwrite settings pane with last runs settings
-        """
-
-        if not path:
-            path = os.path.join(self.config_path, "settings_pane.json")
-
-        if path[-18:] != "settings_pane.json":
-            QMessageBox.critical(
-                self,
-                "Critical",
-                "Incorrect config file. Should be named \"settings_pane.json\".",
-                QMessageBox.StandardButton.Ok
-            )
-
-        
-        try:
-            # load settings pane config from json
-            with open(os.path.join(path), "r") as f:
-                settings_pane_config = json.load(f)
-            # update front panel (can't do in loop due to different QWidget syntax)
-            self.kicker_amp.setValue(settings_pane_config["kicker_amp"])
-            self.harmonic.setValue(settings_pane_config["harmonic"])
-            self.bounds.setValue(settings_pane_config["bounds"])
-            self.freq_shift.setValue(settings_pane_config["freq_shift"])
-            self.sweep_direction.setCurrentText(settings_pane_config["sweep_direction"])
-            self.sweep_rate.setValue(settings_pane_config["sweep_rate"])
-            self.sweep_step_size.setValue(settings_pane_config["sweep_step_size"])
-            self.drive_pattern.setText(settings_pane_config["drive_pattern"])
-            self.ADC_offset_1.setValue(settings_pane_config["ADC_offset_1"])
-            self.ADC_window_1.setValue(settings_pane_config["ADC_window_1"])
-            self.ADC_offset_2.setValue(settings_pane_config["ADC_offset_2"])
-            self.ADC_window_2.setValue(settings_pane_config["ADC_window_2"])
-            
-            # update resdep settings and plot after load
-            self.update_expected_resonances()
-
-        except Exception:
-            logging.error(traceback.format_exc())
-
-        return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def load_run_from_file(self, ) -> None:
-        """
-        load experiment settings config (loads into settings pane) - spawns file dialog window
-        """
-        filename, _ = QFileDialog.getOpenFileName(
-            dir="Data", 
-            filter="All Files (*);; JSON (*.json);; settings config (settings_pane.json)", 
-            selectedFilter="settings config (settings_pane.json)"
-            )
-        # print(f"filename={filename}")
-        # print(f"len(filename)={len(filename)}")
-        if len(filename) > 0:
-            self.status_bar.showMessage("Status: loading...")
-            self.load_run_settings(path=filename)
-            self.status_bar.showMessage("Status: Ready")
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def do_fit(self, ) -> None:
         """
         Performs error function fit to experiment data within xlim of interactive plot for all selected sectors
         """
+        self.status_bar.showMessage("Status: Fitting...")
+
         checked_sector_checkboxes = cast(list[bool], [sector_checkbox.isChecked() for sector_checkbox in self.sector_checkboxes])
         self.checked_sectors = [_sector for _sector, checked in zip(self.sectors, checked_sector_checkboxes) if checked]
 
@@ -678,33 +767,38 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
             )
             return None
         
-        mask, xlims, ylims = self.calculate_fitting_mask()
+        try: 
+            mask, xlims, ylims = self.calculate_fitting_mask()
 
-        self.on_new_plot_info(
-            freqs=self.resdep.freqs, 
-            beam_loss_window_1=self.resdep.beam_loss_window_1, 
-            beam_loss_window_2=self.resdep.beam_loss_window_2
-        )
+            self.on_new_plot_info(
+                freqs=self.resdep.freqs, 
+                beam_loss_window_1=self.resdep.beam_loss_window_1, 
+                beam_loss_window_2=self.resdep.beam_loss_window_2
+            )
 
-        y_model, fitted_beam_energies, fitted_beam_energy_stddevs, fit_results = self.fit_error_functions(mask=mask)
+            y_model, fitted_beam_energies, fitted_beam_energy_stddevs, fit_results = self.fit_error_functions(mask=mask)
 
-        if len(y_model) == 0: # if all fits fail
+            if len(y_model) == 0: # if all fits fail
+                print("Fit results:\n", fit_results)
+                return None
+
+            if len(self.checked_sectors) > 1: # calc stddev of means if multiple fits
+                E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig = calculate_fitted_energy_stats(fitted_beam_energies) 
+            else: # use stddev of fit if only one fit
+                E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig = calculate_fitted_energy_stats(fitted_beam_energies, fitted_beam_energy_stddevs) 
+
+            self.plot_fits(y_model, E0_mean, E0_stddev, mask, xlims, ylims)
+            
+            fitted_beam_energy_str = f"{E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stddev_sigfig*1e6:.0f} keV"
+            print(f"mean E0 = {fitted_beam_energy_str}")
             print("Fit results:\n", fit_results)
-            return None
-
-        if len(self.checked_sectors) > 1: # calc stddev of means if multiple fits
-            E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig = calculate_fitted_energy_stats(fitted_beam_energies) 
-        else: # use stddev of fit if only one fit
-            E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig = calculate_fitted_energy_stats(fitted_beam_energies, fitted_beam_energy_stddevs) 
-
-        self.plot_fits(y_model, E0_mean, E0_stddev, mask, xlims, ylims)
+            # update GUI
+            self.fitted_beam_energy_label.setText(fitted_beam_energy_str)
+            self.fit_results_label.setText(fit_results)
         
-        fitted_beam_energy_str = f"{E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stddev_sigfig*1e6:.0f} keV"
-        print(f"mean E0 = {fitted_beam_energy_str}")
-        print("Fit results:\n", fit_results)
-        # update GUI
-        self.fitted_beam_energy_label.setText(fitted_beam_energy_str)
-        self.fit_results_label.setText(fit_results)
+        finally:
+            self.status_bar.showMessage("Status: Ready")
+
     
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -713,29 +807,30 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         Loads finished experiment data (freqs, beam_loss) from folder, refreshes plot() for do_fit()
         """
         path = QFileDialog.getExistingDirectory(
-            dir=os.path.join(self.parent_path, "data", "resdep"),
+            dir=str(self.current_path / "data" / "resdep"),
             options=QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
             )
         
         if len(path) > 0:
-            # convert path to os format
-            # Windows
-            if platform.system() == "Windows":
-                path = path.replace(posixpath.sep, os.sep)
-            # Linux and MacOS
-            else:
-                path = path.replace(ntpath.sep, os.sep)
+            # # convert path to os format
+            # # Windows
+            # if platform.system() == "Windows":
+            #     path = path.replace(posixpath.sep, os.sep)
+            # # Linux and MacOS
+            # else:
+            #     path = path.replace(ntpath.sep, os.sep)
+            path = Path(path)
             # load freqs txt
-            with open(os.path.join(path, "freqs.txt"), "r") as f:
+            with open(path / "freqs.txt", "r") as f:
                 for line in f.readlines():
                     self.resdep.freqs.append(float(line))	# Hz -> kHz
             # load beam loss windows
-            with open(os.path.join(path, "adc_counter_loss_1.json"), "r") as f:
+            with open(path / "adc_counter_loss_1.json", "r") as f:
                 self.resdep.beam_loss_window_1 = json.load(f)
-            with open(os.path.join(path, "adc_counter_loss_2.json"), "r") as f:
+            with open(path / "adc_counter_loss_2.json", "r") as f:
                 self.resdep.beam_loss_window_2 = json.load(f)
             # load res_freq as guess for fit
-            with open(os.path.join(path, "metadata.json"), "r") as f:
+            with open(path / "metadata.json", "r") as f:
                 metadata: dict = json.load(f)
             
             # safely assign metadata values (if they exist)
@@ -796,7 +891,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.enable_GUI_pane(pane="settings", enable=True)
 
         # re-enable load buttons
-        self.button_load_finished_experiment_data.setEnabled(True)
+        self.button_finished_experiment_data.setEnabled(True)
         
         # disable fit panel
         self.enable_GUI_pane(pane="fit", enable=False)
@@ -813,7 +908,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
     def enable_GUI_pane(self, pane: Literal["settings", "fit"], enable: bool) -> None:
 
         if pane == "settings":
-            for widget in self.settings_pane_widgets:
+            for key, widget in self.settings_pane_widgets.items():
                 widget.setEnabled(enable)
         
         if pane == "fit":
@@ -838,7 +933,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         # if yes
         if answer == QMessageBox.StandardButton.Yes:
             
-            self.save_experiment_settings()
+            self.save_GUI_settings()
             self.close()
             event.accept()
 
@@ -864,8 +959,9 @@ class QtDecorator(QObject):
     progress = Signal(int) # step
     new_plot_info = Signal(list, dict, dict)
     status = Signal(str) # status: message
-    data_path = Signal(str)
+    data_path = Signal(Path)
     start_timer = Signal()
+    ADC_windows = Signal(list, str) # ADC windows, depolarised bunches
     finished = Signal()
     # ------------------------------------------------------------------------------
     def __init__(self, worker: ResonantDepolarisation) -> None:
@@ -878,6 +974,7 @@ class QtDecorator(QObject):
         self.worker.status_callback = self._emit_status
         self.worker.data_path_callback = self._emit_data_path
         self.worker.timer_callback = self._emit_start_timer
+        self.worker.ADC_windows_callback = self._emit_new_ADC_windows
 
         return None
     # ------------------------------------------------------------------------------
@@ -898,12 +995,16 @@ class QtDecorator(QObject):
         self.status.emit(message)
         return None
     # ------------------------------------------------------------------------------
-    def _emit_data_path(self, data_path: str) -> None:
+    def _emit_data_path(self, data_path: Path) -> None:
         self.data_path.emit(data_path)
         return None
     # ------------------------------------------------------------------------------
     def _emit_start_timer(self, ) -> None:
         self.start_timer.emit()
+        return None
+    # ------------------------------------------------------------------------------
+    def _emit_new_ADC_windows(self, ADC_windows: list[int], depolarised_bunches: str) -> None:
+        self.ADC_windows.emit(ADC_windows, depolarised_bunches)
         return None
     # ------------------------------------------------------------------------------
     def run(self,) -> None:

@@ -366,7 +366,7 @@ def calculate_adc_counter_windows(sector: str, method: Literal["loss_minimum", "
         
         dividing_line = 0
         
-        loss_minimum 			: float = np.min(replicated_fill_pattern[f"{sector}B"][:,1])
+        loss_minimum                    = np.min(replicated_fill_pattern[f"{sector}B"][:,1])
         adc_cycle_at_loss_min_index 	= np.where(replicated_fill_pattern[f"{sector}B"][:,1] == loss_minimum)[0].tolist()[0]
         adc_cycle_at_loss_min 		 	= int(replicated_fill_pattern[f"{sector}B"][adc_cycle_at_loss_min_index,0])
         bucket_at_loss_min  			= int(adc_cycle_at_loss_min*buckets_per_cycle)

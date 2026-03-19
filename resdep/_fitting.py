@@ -105,10 +105,22 @@ class Mixin(HasValueProtocol):
                     f       = model, 
                     xdata   = self.freqs_array[mask], 
                     ydata   = self.ratio_loss[f"{sector}B"][mask], 
-                    p0      = [self.resdep.res_freq, 1, 1, 1],
+                    p0      = [self.resdep.res_freq, 0.2, 0.04, 1],
                     maxfev  = 8000
                 )
                 y_model[f"{sector}B"] = model(self.freqs_array[mask], *popt)
+
+                mean_freq       = popt[0]
+                mean_energy     = energy_calc(freq=mean_freq, f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic)
+                sigma_freq      = np.sqrt(np.diag(pcov))[0]
+                sigma_energy    = (
+                    energy_calc(freq=(mean_freq + sigma_freq), f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic) 
+                    - energy_calc(freq=(mean_freq - sigma_freq), f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic)
+                )
+
+                fitted_beam_energy_frequencies[f"{sector}B"] = mean_freq  
+                fitted_beam_energies[f"{sector}B"]           = mean_energy
+                fitted_beam_energy_stddevs[f"{sector}B"]     = sigma_energy
 
                 # -- calculate goodness of fit
                 # residual sum of squares
@@ -118,17 +130,34 @@ class Mixin(HasValueProtocol):
                 # r-squared
                 r2 = 1 - (ss_res / ss_tot)
 
-                fitted_beam_energy_frequencies[f"{sector}B"]    = popt[0]  
-                fitted_beam_energies[f"{sector}B"]              = energy_calc(freq=popt[0], f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic)
-                fitted_beam_energy_stddevs[f"{sector}B"]        = energy_calc(freq=np.sqrt(np.diag(pcov))[0], f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic)
-                fit_results += f"sector={int(sector):02d}, f0={popt[0]:0.3f} kHz, E0={fitted_beam_energies[f'{sector}B']:0.5f} GeV, r^2={r2:0.2f}\n"
+                fit_results += f"sector={int(sector):02d}, f0={mean_freq:0.3f} kHz, E0={mean_energy:0.5f} GeV, r^2={r2:0.2f}\n"
 
             except RuntimeError:
                 logging.error(traceback.format_exc())
-                fit_results += f"sector={sector}, fit failed! (did not converge)"
+                fit_results += f"sector={sector}, fit failed! (did not converge)\n"
 
     
+        print(f"fitted_beam_energy_stddevs={fitted_beam_energy_stddevs}")
+
         return y_model, fitted_beam_energies, fitted_beam_energy_stddevs, fit_results
+    
+    def automagic_fit(self, ) -> None:
+        """
+        Calculates best guess for resonance in the data (based off derivative cdf -> gauss) \\
+        Applies fit over best guess of frequency range.
+        """
+
+        # do derivative of fit. Could outsource to _plotting here? Do it in main GUI
+        # find argmax
+        # find mean of argmax within a certain range (if multiple sectors selected)
+        # define frequency range for fit. could be +- 1 KHz, 0.5 KHz?
+        # calculate mask using mask = np.logical_and(self.freqs_array > left_boundry, self.freqs_array < right_boundry)
+        # call fit_error_functions
+        # plot in main GUI
+        # verify
+        # done :)
+
+        return None
     
 
 if __name__ == "__main__":

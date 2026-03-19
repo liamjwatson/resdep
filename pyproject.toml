@@ -1,0 +1,31 @@
+[project]
+name = "resdep"
+version = "0.0.1"
+description = "Resonant depolarisation package for the Australian Synchrotron displayed in a Qt GUI front end using python backend tools piped through EPICS."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "pyepics==3.5.8", 
+  "PySide6", 
+  "numpy==2.0.2", 
+  "matplotlib==3.9.4",
+  "scipy==1.13.1", 
+  ]
+authors = [
+  { name="Liam Watson", email="watsonl@ansto.gov.au" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://bitbucket.synchrotron.org.au/scm/~watsonl/resdep.git"
+
+[build-system]
+requires = ["uv_build >= 0.10.0, <0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "resdep"
+module-root = "."

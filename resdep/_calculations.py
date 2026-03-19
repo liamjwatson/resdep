@@ -35,7 +35,7 @@ def freq_calc(energy: float, f_rev: float, harmonic: int) -> float: ...
 def freq_calc(energy: np.floating, f_rev: float, harmonic: int) -> np.floating: ...
 def freq_calc(energy: Union[float, np.floating], f_rev: float, harmonic: int) -> Union[float, np.floating]:
     """
-    Energy (GeV) -> frequency (kHz) conversion
+    Energy (GeV) -> frequency (kHz) conversion:
     """
     return f_rev * (energy*1e9*e*a_g/(m_e*c**2) + harmonic - 6)
 
@@ -88,7 +88,7 @@ def calculate_fitted_energy_stats(energies: dict[str, float], stddevs: Union[dic
     
     E0_stddev_sigfig = round_to_1_sigfig(E0_stddev)
     E0_mean_sigfig = round_to_error_sigfig(E0_mean, E0_stddev_sigfig)
-
+            
     return E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig
 
 if __name__ == "__main__":
