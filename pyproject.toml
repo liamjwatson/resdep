@@ -1,6 +1,6 @@
 [project]
 name = "resdep"
-version = "0.0.1"
+version = "1.1"
 description = "Resonant depolarisation package for the Australian Synchrotron displayed in a Qt GUI front end using python backend tools piped through EPICS."
 readme = "README.md"
 requires-python = ">=3.9"

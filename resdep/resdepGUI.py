@@ -13,17 +13,11 @@ import sys
 import json
 import os
 from pathlib import Path
-import ntpath
-import posixpath
 import logging, traceback
 import subprocess
 import platform
 import warnings
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
-# fitting
-from scipy import optimize
-
 # Qt
 from PySide6.QtWidgets import (
     QApplication, 
@@ -70,10 +64,6 @@ import resdep._plotting as _plotting
 import resdep._fitting as _fitting
 from resdep._calculations import calculate_fitted_energy_stats
 
-# TODO: Run (optional) FPM alignment script, write to inits?
-# TODO: Working on this with ADC_integrated buffer which is a much more elegant solution.
-# TODO: if it doesn't contain a loop, then there is no need to thread it or create a separate class and wrapper just for the alignment function
-# TODO: Fix top-up normalisation breaking on one injection
 
 ##########################
 # -------- GUI --------- #
@@ -107,7 +97,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.resdepQt.finished.connect(self.on_finish)
 
         # init path
-        path = Path().cwd()
+        path = Path.cwd()
         self.current_path = path
         self.parent_path = path.parent
         self.config_path = path / "config" / "resdepGUI"
@@ -116,28 +106,54 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.setWindowTitle("Resonant Depolarisation")
         self.setMinimumWidth(400)
 
-        # init icon
-        dir_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
-        reset_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
-
         # create an layout for the whole window
         # ------------------------------------------- #
         # |     Parameters      |       Plot        | #
         # ------------------------------------------- #
-        # |                 do fit?                   #
+        # |       do fit?       |                     #
         # |             -- Progress Bar -- % complete #
-        # |config           Run Button | Abort button #
-        # ------------------------------------------- #
+        #                               Measure MX3 ? #
+        # |config buttons   Run Button | Abort button #
         # status bar -------------------------------- #
+        # ------------------------------------------- #
 
-        full_layout = QVBoxLayout()
-        self.setLayout(full_layout)
+        main_window_layout = QVBoxLayout()
+        self.setLayout(main_window_layout)
 
-        # horizontal layout - side by side parameters and plot
-        top_pane = QWidget(self)
-        top_layout = QHBoxLayout()
-        top_pane.setLayout(top_layout)
+        self.top_pane = QWidget(self)
+        self.top_layout = QHBoxLayout()
+        self.top_pane.setLayout(self.top_layout)
 
+        self._init_settings_pane()
+        self._init_button_pane()
+
+        # --- progress bar
+        # |             -- Progress Bar -- % complete #
+        self.progress_bar = QProgressBar(self)
+
+        # status bar -------------------------------- #
+        self.status_bar = QStatusBar()
+        self.status_bar.showMessage("Status: Ready")
+
+        self._init_plot_pane()
+
+        # add everything to full layout
+        main_window_layout.addWidget(self.top_pane)
+        main_window_layout.addWidget(self.progress_bar)
+        main_window_layout.addWidget(self.MX3_pane)
+        main_window_layout.addWidget(self.button_pane)
+        main_window_layout.addWidget(self.status_bar)
+
+        # read previous settings (if they exist)
+        self.read_GUI_settings()
+
+        self.show()
+
+    # *--------------------------------* #
+	# *---------- GUI Layout ----------* #
+	# *--------------------------------* # 
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def _init_settings_pane(self, ) -> None:
         # --- settings pane
         # ---------------------- #
         # |     Parameters       #
@@ -150,7 +166,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.kicker_amp         = QSpinBox(minimum=0, maximum=100, suffix="%")
         self.harmonic           = QSpinBox(minimum=0, maximum=15)
         self.bounds             = QDoubleSpinBox(minimum=0.001, maximum=2,   decimals=3, singleStep=0.001, suffix="%")
-        self.freq_shift         = QDoubleSpinBox(minimum=-100,  maximum=100, decimals=3, singleStep=0.001, suffix=" KHz")
+        self.freq_shift         = QDoubleSpinBox(minimum=-1000,  maximum=1000, decimals=3, singleStep=0.001, suffix=" KHz")
         self.sweep_direction    = QComboBox(self)
         self.sweep_direction.addItem("Forward")
         self.sweep_direction.addItem("Backward")
@@ -177,6 +193,16 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         ADC_form_layout.addWidget(self.ADC_offset_2)
         ADC_form_layout.addWidget(self.ADC_window_2)
 
+        # ----------------------------- Measure MX3 ? #
+        # This goes above run, but its a setting and should be added to the list of widgets
+
+        self.MX3_pane = QWidget(self)
+        self.MX3_layout = QHBoxLayout()
+        self.MX3_pane.setLayout(self.MX3_layout)
+        self.MX3_layout.addStretch()
+        self.checkbox_measure_MX3 = QCheckBox("Measure MX3?")
+        self.MX3_layout.addWidget(self.checkbox_measure_MX3)
+
         # add settings widgets to a dict for loops (enabling/disabling)
         self.settings_pane_widgets: dict[str, QWidget] = {
             "kicker_amp"        : self.kicker_amp,
@@ -190,7 +216,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
             "ADC_offset_1"      : self.ADC_offset_1,
             "ADC_window_1"      : self.ADC_window_1,
             "ADC_offset_2"      : self.ADC_offset_2,
-            "ADC_window_2"      : self.ADC_window_2
+            "ADC_window_2"      : self.ADC_window_2,
+            "_measure_MX3"      : self.checkbox_measure_MX3
         }
 
         self.load_default_settings()
@@ -248,6 +275,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.timer.timeout.connect(self.update_elapsed_time)
         self.repolarisation_timer.timeout.connect(self.update_repolarisation_time)
         self.button_do_fit.clicked.connect(self.do_fit)
+        self.checkbox_measure_MX3.checkStateChanged.connect(self.update_experiment_settings)
         
         # add widgets to settings pane
         settings_layout.addRow("Kicker amplifier (%)", self.kicker_amp)
@@ -269,18 +297,22 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         settings_layout.addWidget(checkbox_pane)
         settings_layout.addRow("Fitted Beam Energy:", self.fitted_beam_energy_label)
         settings_layout.addRow("Fit results:", self.fit_results_label)
-        # Add to layout. Is horizontal box, so adds left
-        top_layout.addWidget(settings_pane)
 
-        # --- progress bar
-        # |             -- Progress Bar -- % complete #
-        self.progress_bar = QProgressBar(self)
-        
+        # Add to layout. Is horizontal box, so adds left
+        self.top_layout.addWidget(settings_pane)
+
+        return None
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def _init_button_pane(self, ) -> None:
         # --- button pane
         # | config          Run Button | Abort button #
-        button_pane = QWidget(self)
+        self.button_pane = QWidget(self)
         button_layout = QHBoxLayout()
-        button_pane.setLayout(button_layout)
+        self.button_pane.setLayout(button_layout)
+
+        # button icons
+        dir_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        reset_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
 
         # load defaults
         self.button_default_settings = QPushButton("Load defaults")
@@ -326,11 +358,9 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         button_layout.addWidget(self.button_run)
         button_layout.addWidget(self.button_abort)
 
-        # status bar -------------------------------- #
-        self.status_bar = QStatusBar()
-        self.status_bar.showMessage("Status: Ready")
-
-        # --- plot pane
+        return None
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def _init_plot_pane(self, ) -> None:
         # --------------------- #
         # |       Plot        | #
         # --------------------- #
@@ -348,18 +378,9 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         plot_layout.addWidget(plot_toolbar)
         plot_layout.addWidget(self.canvas)
         # Add to top layout. Is horizontal box, so adds right
-        top_layout.addWidget(plot_pane)
+        self.top_layout.addWidget(plot_pane)
 
-        # add everything to full layout
-        full_layout.addWidget(top_pane)
-        full_layout.addWidget(self.progress_bar)
-        full_layout.addWidget(button_pane)
-        full_layout.addWidget(self.status_bar)
-
-        # read previous settings (if they exist)
-        self.read_GUI_settings()
-
-        self.show()
+        return None
 
     # *--------------------------------* #
 	# *---------- Experiment ----------* #
@@ -454,6 +475,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         """
         self.status_bar.showMessage("Status: Experiment finished")
 
+        # reset state
+        self._abort_requested = False
         # disable abort button
         self.button_abort.setEnabled(False)
         # self.button_abort.setStyleSheet("QPushButton {background-color: grey;}")
@@ -475,6 +498,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.save_experiment_settings_to_json(path=self.resdep.data_path)
 
         self.timer.stop()
+
         try:
             self.elapsed_time_label.setText(f"Experiment completed in {self.elapsed_timedelta}")
         except AttributeError:
@@ -521,7 +545,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         repolarisation_timedelta = datetime.timedelta(seconds=self.repolarisation_time)
         self.repolarisation_time_label.setText(f"{repolarisation_timedelta}")
 
-        self.polarisation = 92.38*(1-np.exp(-self.repolarisation_time/779))
+        # self.polarisation = 92.38*(1-np.exp(-self.repolarisation_time/779))
+        self.polarisation = 100*(1-np.exp(-self.repolarisation_time/779))
         self.polarisation_label.setText(f"{self.polarisation:0.2f}%")
 
         if self.repolarisation_time >= 779*10:
@@ -546,6 +571,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
                 self.GUI_settings.setValue(key, widget.currentText())
             elif isinstance(widget, QLineEdit):
                 self.GUI_settings.setValue(key, widget.text())
+            elif isinstance(widget, QCheckBox):
+                self.GUI_settings.setValue(key, widget.isChecked())
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -576,6 +603,9 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
                     widget.setCurrentText(str(value))
                 elif isinstance(widget, QLineEdit):
                     widget.setText(str(value))
+                elif isinstance(widget, QCheckBox):
+                    widget.setChecked(bool(value))
+
             except Exception:
                 logging.error(traceback.format_exc())
 
@@ -593,6 +623,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
                     settings_pane_config[key] = widget.currentText()
                 elif isinstance(widget, QLineEdit):
                     settings_pane_config[key] = widget.text()
+                elif isinstance(widget, QCheckBox):
+                    settings_pane_config[key] = widget.isChecked()
 
             # save to file
             if not path:
@@ -643,6 +675,11 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.resdep.set_adc_counter_offset_2 = self.ADC_offset_2.value()
         self.resdep.set_adc_counter_window_2 = self.ADC_window_2.value()
 
+        if self.checkbox_measure_MX3.isChecked:
+            self.resdep._measuring_MX3 = True
+        else:
+            self.resdep._measuring_MX3 = False
+            
         # calculate range
         self.resdep.calculate_range()
 
@@ -682,7 +719,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
             "ADC_offset_1"      : 0,
             "ADC_window_1"      : 42,
             "ADC_offset_2"      : 42,
-            "ADC_window_2"      : 44
+            "ADC_window_2"      : 44,
+            "_measure_MX3"      : False
         }
 
         for key, widget in self.settings_pane_widgets.items():
@@ -693,6 +731,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
                     widget.setCurrentText(default_values[key])
                 elif isinstance(widget, QLineEdit):
                     widget.setText(default_values[key])
+                elif isinstance(widget, QCheckBox):
+                    widget.setChecked(default_values[key])
             
             except Exception:
                 logging.error(traceback.format_exc())
@@ -723,6 +763,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
                         widget.setCurrentText(settings_pane_config[key])
                     elif isinstance(widget, QLineEdit):
                         widget.setText(settings_pane_config[key])
+                    if isinstance(widget, QCheckBox):
+                        widget.setChecked(settings_pane_config[key])
                 
                 except Exception:
                     logging.error(traceback.format_exc())
@@ -1048,7 +1090,10 @@ class PlotCanvas(FigureCanvasQTAgg):
 def spawn():
     app = QApplication(sys.argv)
     window = MainWindow()
-    sys.exit(app.exec())
+    if hasattr(sys, "ps1"): # interactive check
+        app.exec()
+    else:
+        sys.exit(app.exec())
 
 # run the app
 if __name__ == "__main__":

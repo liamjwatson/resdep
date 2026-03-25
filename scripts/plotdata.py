@@ -4,15 +4,20 @@ Plot resdep data
 
 from typing import Any
 import json
+from matplotlib import legend
 import numpy as np
 import matplotlib.pyplot as plt 
 import os
+from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 
 # fitting
 from scipy import stats, optimize
 # from sklearn.metrics import r2_score
+
+# resdep modules
+from resdep.epicsBPMs import SR_BPMs, MX3_BPMs, TBPMs
 
 def model(x, x0, s, A, c):
     law = stats.norm(loc=x0, scale=s)
@@ -28,14 +33,14 @@ c 			= 299792458				# m/s
 e 			= 1.602176634e-19		# C
 
 # --- import data
-current_path = os.getcwd()
-print(current_path)
-parent_path = os.path.dirname(current_path)
-data_path = "Z:\\usr\\personal\\watsonl\\resdep-master\\data\\resdep\\2026-03-02\\2150h"
+
+# data_path = Path("/san_data/accelerator/opdata/usr/personal/watsonl/resdep-develop")
+data_path = Path.cwd()
+data_path = data_path / "data" / "resdep" / "2026-03-30" / "2240h"
 # data_path = os.path.join(parent_path, "data", "resdep", "2026-03-02", "2300h")
 # data_path = os.path.join(current_path, "data", "resdep", "2026-02-22", "1146h")
 # metadata json
-with open(os.path.join(data_path, 'metadata.json'), 'r') as f:
+with open(data_path / 'metadata.json', 'r') as f:
 	metadata = json.load(f)
 f.close()
 # freqs txt
@@ -67,14 +72,34 @@ f.close()
 with open(os.path.join(data_path, "ODB_data.json"), "r") as f:
 	ODB_data = json.load(f)
 
+# Assign metadata to variables:
 if "f_rev" in metadata.keys():
 	f_rev = metadata["f_rev"]
-
 tune = metadata["fractional tune"]
-
-
-# Assign metadata to variables:
 harmonic = metadata['harmonic']
+
+# --- BPMs
+sr_bpms = ...
+mx3_bpms = ...
+tbpms = ...
+bpm_path = data_path / "BPMs"
+if bpm_path.exists():
+	# SR
+	sr_path = bpm_path / "SR"
+	if sr_path.exists():
+		sr_bpms = SR_BPMs()
+		sr_bpms.load_from_finished_experiment(path=sr_path)
+	# TBPM
+	tbpm_path = bpm_path / "TBPM"
+	if tbpm_path.exists():
+		tbpms = TBPMs()
+		tbpms.load_from_finished_experiment(path=tbpm_path)
+	# MX3
+	mx3_path = bpm_path / "MX3"
+	if mx3_path.exists():
+		mx3_bpms = MX3_BPMs()
+		mx3_bpms.load_from_finished_experiment(path=mx3_path)
+
 
 # calculate expected resonance frequency
 res_freq: float = f_rev * (tune + harmonic)
@@ -226,7 +251,7 @@ for key in beam_loss_window_1:
 start = 0
 end = len(freqs_array)
 sigma = 10
-window_length = 1101
+window_length = 5 # 1101
 do_fit = False
 sectors = ["1", "4", "8", "11", "12", "13"]
 # sectors = ["1", "8", "13"]
@@ -313,7 +338,7 @@ axs.ticklabel_format(useOffset=False)
 second_axis.ticklabel_format(useOffset=False)
 
 # plt.savefig(os.path.join(data_path, "ratio_loss.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
-plt.savefig(os.path.join(data_path, "ratio_loss_fit.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+# plt.savefig(os.path.join(data_path, "ratio_loss_fit.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
 # --- deriv plt.show()
 
@@ -329,7 +354,7 @@ second_axis.set_xlabel('Energy (GeV)')
 deriv_axs.ticklabel_format(useOffset=False)
 second_axis.ticklabel_format(useOffset=False)
 
-plt.show()
+# plt.show()
 
 
 
@@ -361,3 +386,30 @@ plt.show()
 # plt.savefig(os.path.join(data_path, "ODB.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
 # plt.show()
+
+
+# ----------------------------------- #
+# ------		BPMs	  	    ----- #
+# ----------------------------------- #
+
+BPM_classes = [sr_bpms, tbpms, mx3_bpms]
+BPM_groups = ["SR", "TBPM", "MX3"]
+
+for BPMs, group_name in zip(BPM_classes, BPM_groups):
+	for attribute in ["x_position", "y_position", "intensity"]:
+		if hasattr(BPMs, attribute):
+
+			fig, axs = plt.subplots(figsize=(8,6), layout="tight")
+			fig.suptitle(f"{group_name} BPMs: {attribute}")
+
+			attr = getattr(BPMs, attribute)
+
+			for key, value in attr.items():
+				# norm_value = np.array(value)/np.max(value)
+				value_array = np.array(value)
+				value_offset = value_array - np.mean(value_array)
+				axs.plot(value_offset, '-', label=key)
+
+# axs.legend()
+
+plt.show()

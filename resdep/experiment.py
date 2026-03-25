@@ -16,6 +16,7 @@ from scipy import optimize
 from functools import partial
 
 from resdep.epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions
+from resdep.epicsBPMs import SR_BPMs, MX3_BPMs, TBPMs # BPM subclasses
 from resdep._calculations import energy_calc, freq_calc, model
 from resdep._progressBars import printProgressBar
 
@@ -59,7 +60,8 @@ class ResonantDepolarisation():
 		self._abort_requested = False
 
 		# --- init states
-		self._injecting: bool = False
+		self._injecting		: bool = False
+		self._measuring_MX3	: bool = False
 
 		# default f_rev. Will calculate f_rev from masterRF on experiment start 
 		# (so we dont have any epics connection on GUI start)
@@ -155,19 +157,17 @@ class ResonantDepolarisation():
 			self.sweep_span.put(self.set_sweep_span, use_complete=True) 	# kHz
 			self.sweep_period.put(self.set_sweep_period, use_complete=True)	# us
 			self.pattern.put(self.set_drive_pattern, use_complete=True)
-			self.kicker_amp.put(self.set_kicker_amp, use_complete=True)		# %
 			# wait for puts to complete
 			while not all([
 				self.sweep_freq.put_complete,
 				self.sweep_span.put_complete,
 				self.sweep_period.put_complete,
 				self.pattern.put_complete,
-				self.kicker_amp.put_complete
 			]):
 				time.sleep(0.05)
+				
+			self.injection_trigger.add_callback(callback=self.onValueChange)
 
-			last_kicker_call	: float = time.time()
-			last_fast_log_call	: float = time.time()
 			last_slow_log_call	: float = time.time()
 
 			print("|--------------------------------------------|")
@@ -175,8 +175,35 @@ class ResonantDepolarisation():
 			print("|---------- Resonant Depolarisation ---------|")
 			print("|--------------------------------------------|")
 
-			# --- Sweep frequency by stepping through kicker drive frequency setpoint in loop
-			self.interruptible_sleep(1)
+			# --- Collect baseline data (BPMs)
+			end = time.time() + 10
+			if self.status_callback:
+				self.status_callback("Status: Collecting baseline BPM data (10 s)...")
+			else:
+				print("Status: Collecting baseline BPM data (10 s)...")
+
+			while time.time() <= end:
+				now = time.time()
+				self.fast_log_data()
+				if (now - last_slow_log_call) >= 1/self.slow_log_frequency:
+					self.slow_log_data()
+					last_slow_log_call = time.time()
+				# --- abort if signal is sent from GUI
+				if self._abort_requested:
+					if self.status_callback:
+						self.status_callback("Status: Experiment interrupted!")
+					# go to finally block
+					raise KeyboardInterrupt
+				
+				time.sleep(1/self.fast_log_frequency)
+
+			# --- turn on kicker, prep for frequency sweep
+			self.kicker_amp.put(self.set_kicker_amp, use_complete=True)		# %
+			while not self.kicker_amp.put_complete:
+				time.sleep(0.05)
+
+			last_kicker_call	: float = time.time()
+			last_fast_log_call	: float = time.time()
 
 			self.step: int = 0
 			if self.status_callback:
@@ -184,10 +211,7 @@ class ResonantDepolarisation():
 			if self.timer_callback:
 				self.timer_callback()
 
-			# print(f"Sweep Direction = {self.sweep_direction}")
-			# print(f"Start freq = {self.set_sweep_freq}")
-			# print(f"End freq = {self.sweep_end}")
-
+			# --- Sweep frequency by stepping through kicker drive frequency setpoint in loop
 			while self.step <= self.sweep_steps:
 
 				# listen for injections
@@ -203,13 +227,8 @@ class ResonantDepolarisation():
 
 				# --- Call fast_log_data() at fast_log_frequency Hz 
 				if (now - last_fast_log_call) >= 1/self.fast_log_frequency:
-					# ? Later implementation -- turn off kicker for 1s before data collection to damp driven betatron oscillations
-					# NOTE this doubles experiment time and will have to be updated in the metadata / print statement
-					# kicker_amp.put(0)
-					# time.sleep(1)
 					self.fast_log_data()
 					last_fast_log_call = time.time()
-					# kicker_amp.put(set_kicker_amp)
 
 				# --- Update progress bar, plot and ODB at 1 Hz
 				if (now - last_slow_log_call) >= 1/self.slow_log_frequency:
@@ -227,7 +246,7 @@ class ResonantDepolarisation():
 
 				# --- Sleep on injections
 				if self._injecting:
-					# turn off kicker, sleep, turn it back on
+					# turn off kicker
 					self.kicker_amp.put(0)
 					# update status to GUI
 					if self.status_callback:
@@ -266,7 +285,7 @@ class ResonantDepolarisation():
 				self.status_callback("Status: Cleaning up...")
 
 			if self.progress_callback:
-					self.progress_callback(self.sweep_steps)
+				self.progress_callback(self.sweep_steps)
 
 			self.save_data()
 
@@ -279,16 +298,7 @@ class ResonantDepolarisation():
 				time.sleep(0.05)
 			print("Kicker OFF!")
 
-			# TODO: Fix top-up normalisation breaking on one injection
-			# # process data if it exists
-			# if len(self.beam_loss_window_1.values()) > 0:
-			# 	print("Attempting top-up normalisation...")
-			# 	self.top_up_normalisation()
-			# 	if not plot_callback:
-			# 		print("Plotting data inside resdep")
-			# 		self.plot_data()
-			# 	else:
-			# 		print("GUI detected so no plot.")
+			self.injection_trigger.clear_callbacks()
 
 			# restore epicsBLM window settings
 			print("attempting to restore BLM inits...")
@@ -334,6 +344,18 @@ class ResonantDepolarisation():
 		self.blm.get_init_adc_counter_masks()
 		self.blm.get_decimation()
 
+		# --- BPMs
+		# Storage ring
+		self.sr_bpms = SR_BPMs()
+		self.sr_bpms.connect()
+		# TBPMs
+		self.tbpms = TBPMs()
+		self.tbpms.connect()
+		# MX3
+		if self._measuring_MX3:
+			self.mx3_bpms = MX3_BPMs()
+			self.mx3_bpms.connect()
+
 		# --- drive
 		self.sweep_freq_act = epics.pv.get_pv(f'IGPF:{self.direction}:DRIVE:FREQ_ACT', connect=True)
 		self.sweep_freq 	= epics.pv.get_pv(f'IGPF:{self.direction}:DRIVE:FREQ', connect=True)
@@ -346,30 +368,29 @@ class ResonantDepolarisation():
 		self.dcct = epics.pv.get_pv('SR11BCM01:CURRENT_MONITOR', connect=True)
 
 		# --- injection trigger
-		self.injection_trigger = epics.pv.get_pv("TS01EVG01:INJECTION_MODE_STATUS", connect=True, callback=(self.onValueChange))
+		self.injection_trigger = epics.pv.get_pv("TS01EVG01:INJECTION_MODE_STATUS", connect=True)
 
 		# --- ODB beam size and position
 		self.ODB_PVs: dict[str, Any] = {}
 		self.ODB_PVs["X_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:X_SIZE_MONITOR", connect=True)
 		self.ODB_PVs["X_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:X_OFFSET_MONITOR", connect=True)
 		self.ODB_PVs["Y_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:Y_SIZE_MONITOR", connect=True)
-		self.ODB_PVs["Y_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)
+		self.ODB_PVs["Y_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)\
 
 		# --- SR/LCW/RF temperatures
-
 		# initialise PV dicts
 		self.RF601_LCW_temperature_PVs	: dict[str, Any] = {}
 		self.RF602_LCW_temperature_PVs	: dict[str, Any] = {}
 		self.RF701_LCW_temperature_PVs	: dict[str, Any] = {}
 		self.RF702_LCW_temperature_PVs	: dict[str, Any] = {}
 		
-		self.RF601_body_temperature_PVs: dict[str, Any] = {}
-		self.RF602_body_temperature_PVs: dict[str, Any] = {}
-		self.RF701_body_temperature_PVs: dict[str, Any] = {}
-		self.RF702_body_temperature_PVs: dict[str, Any] = {}
+		self.RF601_body_temperature_PVs	: dict[str, Any] = {}
+		self.RF602_body_temperature_PVs	: dict[str, Any] = {}
+		self.RF701_body_temperature_PVs	: dict[str, Any] = {}
+		self.RF702_body_temperature_PVs	: dict[str, Any] = {}
 
-		self.magnet_temperature_PVs	: dict[str, Any] = {}
-		self.tunnel_air_temperature_PVs: dict[str, Any] = {}
+		self.magnet_temperature_PVs		: dict[str, Any] = {}
+		self.tunnel_air_temperature_PVs	: dict[str, Any] = {}
 		self.beam_pipe_temperature_PVs	: dict[str, Any] = {}
 		self.slab_temperature_PVs		: dict[str, Any] = {}
 		self.SUBH_temperature_PVs		: dict[str, Any] = {}
@@ -419,9 +440,9 @@ class ResonantDepolarisation():
 			for i in range(1, 14+1, 1):
 				PV_dict[f"{prefix}{i:02d}:TEMPERATURE_MONITOR"] = epics.pv.get_pv(f"{prefix}{i:02d}:TEMPERATURE_MONITOR", connect=True)
 			prefix = f"SR0{cavity[0]}RF0{cavity[-1]}CIR01"
-			PV_dict[f"{prefix}:RF_TEMP_MONITOR"]  		= epics.pv.get_pv(f"{prefix}:RF_TEMP_MONITOR", connect=True)
-			PV_dict[f"{prefix}:REGULATOR_TEMP_MONITOR"]  	= epics.pv.get_pv(f"{prefix}:REGULATOR_TEMP_MONITOR", connect=True)
-			PV_dict[f"{prefix}:SHUNT_TEMP_MONITOR"]  		= epics.pv.get_pv(f"{prefix}:SHUNT_TEMP_MONITOR", connect=True)
+			PV_dict[f"{prefix}:RF_TEMP_MONITOR"]  				= epics.pv.get_pv(f"{prefix}:RF_TEMP_MONITOR", connect=True)
+			PV_dict[f"{prefix}:REGULATOR_TEMP_MONITOR"]  		= epics.pv.get_pv(f"{prefix}:REGULATOR_TEMP_MONITOR", connect=True)
+			PV_dict[f"{prefix}:SHUNT_TEMP_MONITOR"]  			= epics.pv.get_pv(f"{prefix}:SHUNT_TEMP_MONITOR", connect=True)
 			
 		# magnets
 		magnet_temperature_PV_names = [
@@ -569,13 +590,9 @@ class ResonantDepolarisation():
 		self.slow_timestamps_str		: list[str] = []
 		self.injections					: list[datetime.datetime] = []
 		self.injections_str				: list[str] = []
-		self.beam_losses				: dict[str, list[float]] = {}
 		self.beam_loss_window_1 		: dict[str, list[float]] = {}
 		self.beam_loss_window_2 		: dict[str, list[float]] = {}
-		self.top_up_loss_window_1		: dict[str, list[float]] = {}
-		self.top_up_loss_window_2		: dict[str, list[float]] = {}
 		for key in self.blm.loss:
-			self.beam_losses[key] = []
 			self.beam_loss_window_1[key] = []
 			self.beam_loss_window_2[key] = []
 		self.ODB_data : dict[str, list[float]] = {}
@@ -626,10 +643,17 @@ class ResonantDepolarisation():
 				self.freqs.append(0) 	# still append something so that the vectors are the same size
 			self.set_freqs.append(self.set_sweep_freq)
 			self.current.append(self.dcct.get())						# A
+			
+			# BLMs
 			for key in self.blm.loss:
-				# beam_losses[key].append(blm.loss[key].get())	# Counts
 				self.beam_loss_window_1[key].append(self.blm.adc_counter_loss_1[key].get())
 				self.beam_loss_window_2[key].append(self.blm.adc_counter_loss_2[key].get())
+
+			# BPMs
+			self.sr_bpms.record_data()
+			self.tbpms.record_data()
+			if self._measuring_MX3:
+				self.mx3_bpms.record_data()
 
 		except Exception:
 			logging.error(traceback.format_exc())
@@ -689,7 +713,7 @@ class ResonantDepolarisation():
 			time.sleep(0.01)
 		
 		return False
-	# ------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	# -------------------------------------------------------------------------------------------------------------------------------------------------------
 	def calculate_adc_counter_windows(self, sector: int = 8) -> None:
 		"""
 		Calculates the offsets and window lengths of the two counter windows for a specific sector \\
@@ -722,28 +746,36 @@ class ResonantDepolarisation():
 			This is basically a conversion from the ADC cycles (window length and pos) to bunch number
 		"""
 		SUM_DEC 			= 86
+		SUMDEC_PERIODS 		= 20
 		buckets_per_cycle 	= 360/SUM_DEC
+		
+		# set sumdec periods
 		replicated_fill_pattern: npt.NDArray[np.floating]
 
 		try:
-			print("Time aligning BLM ADC windows and BbB system...")
+			print("Status: Time aligning BLM ADC windows and BbB system...")
 
 			# --- BLM ---
-			replicated_fill_pattern = self.blm.integrated_buffer_loss[f"{sector}B"].get() 
+			current_number_of_sumdec_periods: Union[int, None] = self.blm.sumdec_periods[f"{sector}"].get()
+			time.sleep(0.1)
+			if isinstance(current_number_of_sumdec_periods, float):
+				if current_number_of_sumdec_periods < 20:
+					self.blm.sumdec_periods[f"{sector}"].put(SUMDEC_PERIODS)
+					if self.status_callback:
+						self.status_callback("Status: Waiting for injection to update integrated buffer...")
+					while not self._injecting:
+						self.interruptible_sleep(1)
+					self.interruptible_sleep(10)
+					self._injecting = False
+					if self.status_callback:
+						self.status_callback("Status: Time aligning BLM ADC windows and BbB system...")
+			elif current_number_of_sumdec_periods is None:
+				raise TypeError(f"sumdec_periods for sector={sector} returned None")
+			else:
+				print(f"current_number_of_sumdec_periods={current_number_of_sumdec_periods} and is type {type(current_number_of_sumdec_periods)}")
+				raise TypeError
 
-			if len(replicated_fill_pattern) < SUM_DEC:
-				warnings.warn(
-					f"BLM integrated buffer loss is returning {len(replicated_fill_pattern)} elements, not 86.\n"
-					f"To fix, ssh into root@sr{sector:02d}ioc91:\n"
-					"root@libera:~# rw\n"
-					"root@libera:~# nano /opt/libera-ioc/db/blm_monitor.db\n" 
-					"find the ADC integrated signal: (ctrl+W \"adc_integrated\"):\n"
-					"\"record(liberaSignal, \"$(P):signals:adc_integrated\") .... \"\n"
-					"change field(NGRP, 16) to (NGRP, 86) and save the file\n"
-					"root@libera:~# ro\n"
-					"root@libera:~# /opt/etc/init.d/S80libera-ioc restart"
-				)
-				return None
+			replicated_fill_pattern = self.blm.integrated_buffer_loss[f"{sector}B"].get() 
 		
 			# integrated buffer is updside down, need to normalise 
 			replicated_fill_pattern = replicated_fill_pattern/np.max(replicated_fill_pattern)
@@ -831,76 +863,6 @@ class ResonantDepolarisation():
 	# *-------- Post-processing -------* #
 	# *--------------------------------* #
 	# --------------------------------------------------------------------------------------------------------------------
-	def top_up_normalisation(self,) -> None:
-		"""
-		Normalises the data to the change in the 'charge equivalent' halves of the beam after top-up. \\
-		Since the top-up happens to a single bunch, this creates a step change in the *ratio* of the \\
-		charge equivalent windows, which looks very much like the depolarisation resonance. 
-		"""
-
-		if len(self.injections) == 0:
-			print("No injections detected => no top-up normalisation applied.")
-			return None
-
-		print("(inside function) Attempting top-up normalisation...")
-
-		# copy loss data to new dicts
-		for key in self.blm.loss:
-			self.top_up_loss_window_1[key] = self.beam_loss_window_1[key]
-			self.top_up_loss_window_2[key] = self.beam_loss_window_2[key]
-		
-		# convert regular timestamps to type: numpy.datetime64
-		injections_np: npt.NDArray[np.datetime64] = np.array(self.injections, dtype="datetime64")
-		timestamps_np: npt.NDArray[np.datetime64] = np.array(self.timestamps_datetime, dtype="datetime64")
-
-		n_seconds_to_average: int = 3
-		last_index: int = len(timestamps_np)-1
-
-		try:
-			for inj_time in injections_np:
-				# find index in dataset that matches (just before) injection time
-				index = np.flatnonzero([inj_time < timestamps_np])[-1]
-				# Make sure there is sufficient data available to average
-				if (index == 0) or (index == last_index):
-					# ignore injections at very start or end
-					continue
-				before = index - (n_seconds_to_average/self.fast_log_frequency)
-				after  = index + (n_seconds_to_average/self.fast_log_frequency)
-				if before < 0:
-					before = 0
-				if after > last_index:
-					after = last_index
-				# --- window 1
-				for loss in self.top_up_loss_window_1.values():
-					# take the average of the data before and after injection
-					mean_before_inj = np.mean(loss[before:index])
-					mean_after_inj  = np.mean(loss[index:after])
-					# calculate scaling factor for which to scale the data AFTER injection to match that BEFORE injection
-					scaling_factor = float(mean_before_inj/mean_after_inj)
-					# scale ALL data after injection
-					loss[index:] = [value * scaling_factor for value in loss[index:]]
-				# --- window 2
-				for loss in self.top_up_loss_window_2.values():
-					# take the average of the data before and after injection
-					mean_before_inj = np.mean(loss[before:index])
-					mean_after_inj  = np.mean(loss[index:after])
-					# calculate scaling factor for which to scale the data AFTER injection to match that BEFORE injection
-					scaling_factor = float(mean_before_inj/mean_after_inj)
-					# scale ALL data after injection
-					loss[index:] = [value * scaling_factor for value in loss[index:]]
-
-			print("Normalised!")
-
-		except Exception:
-			logging.error(traceback.format_exc())
-
-			# ? The data should stop appending while sleeping, so I probably don't need the timedelta...
-			# after injection (10s sleep)
-			# after_inj = inj_time + datetime.timedelta(seconds=10) 
-			
-
-		return None
-	# --------------------------------------------------------------------------------------------------------------------
 	def save_data(self, ) -> None:
 		"""
 		Saves PV data to text, json and csv files depending on structure \\
@@ -952,13 +914,7 @@ class ResonantDepolarisation():
 			with open(self.data_path / 'injections.txt', 'w') as f:
 					for value in self.injections_str:
 						f.write(value + '\n')
-
-			# top up loss (if any)
-			with open(self.data_path / "top-up_loss_window_1.json", "w") as f:
-				json.dump(self.top_up_loss_window_1, f)
-			with open(self.data_path / "top-up_loss_window_2.json", "w") as f:
-				json.dump(self.top_up_loss_window_2, f)
-
+						
 			# temperatures (will need a separate folder)
 			temperatures_path = self.data_path / "temperatures"
 			Path.mkdir(temperatures_path)
@@ -966,6 +922,24 @@ class ResonantDepolarisation():
 			for temperature_dict, save_file_name in zip(self.temperature_value_dicts, self.temperature_save_file_names):
 				with open(temperatures_path / save_file_name, "w") as f:
 					json.dump(temperature_dict, f)
+
+			# --- BPMs
+			# SR 
+			sr_bpms_path = self.data_path / "BPMs" / "SR"
+			Path.mkdir(sr_bpms_path, parents=True)
+			self.sr_bpms.save_data(path=sr_bpms_path)
+
+			# TBPMs
+			tbpms_path = self.data_path / "BPMs" / "TBPMs"
+			Path.mkdir(tbpms_path, parents=True)
+			self.tbpms.save_data(path=tbpms_path)
+
+			# MX3 
+			if self._measuring_MX3:
+				mx3_bpms_path = self.data_path / "BPMs" / "MX3"
+				Path.mkdir(mx3_bpms_path, parents=True)
+				self.mx3_bpms.save_data(path=mx3_bpms_path)
+
 
 		except Exception:
 			logging.error(traceback.format_exc())

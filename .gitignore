@@ -1,4 +1,5 @@
 .venv/
+config/
 __pycache__/
 dist/*.txt
 bitbucket-pipelines.yml
