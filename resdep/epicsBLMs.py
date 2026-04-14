@@ -14,7 +14,6 @@ class BLMs:
     *e.g.* get PVs, get initial values, restore defaults
     """
     def __init__(self, ):
-        
         # --- states
         self._got_loss_PVs              : bool = False
         self._got_settings_PVs          : bool = False
@@ -25,6 +24,7 @@ class BLMs:
         self._got_init_sumdec_adc_masks : bool = False
         self._got_decimation            : bool = False
         self._got_sector11              : bool = False
+        self._got_t2_trigger_delays     : bool = False
 
         # initialise dictionaries
         # using "flat is better than nested" approach, all dicts have the same keys
@@ -52,6 +52,7 @@ class BLMs:
         self.t0_interval                : dict[str, Any] = {}
         self.t0_interval_expected       : dict[str, Any] = {}
         self.sumdec_periods             : dict[str, Any] = {}
+        self.t2_trigger_delays          : dict[str, Any] = {}
 
         # --- initial values
         self.init_mode                  : Union[str, None] = None
@@ -72,23 +73,21 @@ class BLMs:
         self.init_t0_interval           : dict[str, Union[float, None]] = {}
         self.init_t0_interval_expected  : dict[str, Union[float, None]] = {}
         self.init_sumdec_periods        : dict[str, Union[float, None]] = {}
+        self.init_t2_trigger_delays     : dict[str, Union[float, None]] = {}
 
         # --- default values
-        self.default_mode                  : Union[str, None] = None
-        self.default_Vgc                   : dict[str, float] = {}
-        self.default_att                   : dict[str, float] = {}
-        self.default_decay_Vgc             : dict[str, float] = {}
-        self.default_decay_att             : dict[str, float] = {}
-        self.default_adc_counter_offset_1  : dict[str, Union[float, None]] = {}
-        self.default_adc_counter_window_1  : dict[str, Union[float, None]] = {}
-        self.default_adc_counter_offset_2  : dict[str, Union[float, None]] = {}
-        self.default_adc_counter_window_2  : dict[str, Union[float, None]] = {}
-        self.default_sumdec_adc_mask_offset: dict[str, Union[float, None]] = {}
-        self.default_sumdec_adc_mask_window: dict[str, Union[float, None]] = {}
-
-        # paths
-        self.current_path: str = os.getcwd()
-        self.parent_path : str = os.path.dirname(self.current_path)
+        self.default_mode                   : Union[str, None] = None
+        self.default_Vgc                    : dict[str, float] = {}
+        self.default_att                    : dict[str, float] = {}
+        self.default_decay_Vgc              : dict[str, float] = {}
+        self.default_decay_att              : dict[str, float] = {}
+        self.default_adc_counter_offset_1   : dict[str, Union[float, None]] = {}
+        self.default_adc_counter_window_1   : dict[str, Union[float, None]] = {}
+        self.default_adc_counter_offset_2   : dict[str, Union[float, None]] = {}
+        self.default_adc_counter_window_2   : dict[str, Union[float, None]] = {}
+        self.default_sumdec_adc_mask_offset : dict[str, Union[float, None]] = {}
+        self.default_sumdec_adc_mask_window : dict[str, Union[float, None]] = {}
+        self.default_t2_trigger_delays      : dict[str, Union[float, None]] = {}
 
         # --- wait time between PV calls / assignments to not flood system
         self.__wait_time = 0.1
@@ -344,6 +343,45 @@ class BLMs:
                     time.sleep(self.__wait_time)
 
         print("Full decimation applied!")
+
+        return None
+    # ----------------------------------------------------------------------------------------------------------
+    def get_t2_trigger_delays(self,) -> None:
+        """
+        Loads `t2` trigger delay PVs and initial values. \\
+        Supposed units: *ADC cycles*
+
+        `t2` triggers are synchronised with the bunch train, delays increase as you move around the ring. \\
+        This affects integrated buffer loss (triggered on `t2`), so that they all look the same, despite being at \\
+        different locations around the ring.
+        """
+
+        if self._got_t2_trigger_delays:
+            print("Already loaded ")
+            return None
+        
+        self.default_t2_trigger_delays = {
+            "1":     11,
+            "2":      3,
+            "3":      0,
+            "4":     33,
+            "5":     47,
+            "6":     59,
+            "7":     92, # 1 rev +  6
+            "8":     97, # 1 rev + 11
+            "9":    105, # 1 rev + 19
+            "10":   108, # 1 rev + 22
+            "11":   113, # 1 rev + 27
+            "12":   112, # 1 rev + 26
+            "13":    93, # 1 rev +  7
+            "14":     4
+        }
+
+        for sector in range(1, 14+1, 1):
+            self.t2_trigger_delays[f"{sector}"] = epics.pv.get_pv(f"SR{sector:02d}BLM01:triggers:t2:delay_sp", connect=True)
+
+        for key, PV in self.t2_trigger_delays.items():
+            self.init_t2_trigger_delays[key] = PV.get()
 
         return None
     # ----------------------------------------------------------------------------------------------------------

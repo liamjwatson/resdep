@@ -20,15 +20,15 @@ v_y 		: float = 0.21626 				# 5.219
 v_synch 	: float	= 0.00847				
 
 @overload
-def energy_calc(freq: float, f_rev: float, harmonic: int) -> float: ...
-@overload
 def energy_calc(freq: np.floating, f_rev: float, harmonic: int) -> np.floating: ...
+@overload
+def energy_calc(freq: float, f_rev: float, harmonic: int) -> float: ...
 def energy_calc(freq: Union[float, np.floating], f_rev: float, harmonic: int) -> Union[float, np.floating]:
     """
     Frequency (kHz) -> energy (GeV) conversion
     """
     return (freq/f_rev - harmonic + 6) * m_e*c**2/(e*a_g*1e9)
-
+# ------------------------------------------------------------------------------------------------------
 @overload
 def freq_calc(energy: float, f_rev: float, harmonic: int) -> float: ...
 @overload
@@ -38,20 +38,20 @@ def freq_calc(energy: Union[float, np.floating], f_rev: float, harmonic: int) ->
     Energy (GeV) -> frequency (kHz) conversion:
     """
     return f_rev * (energy*1e9*e*a_g/(m_e*c**2) + harmonic - 6)
-
+# ------------------------------------------------------------------------------------------------------
 def tune_calc(energy: float) -> float:
     """
     Energy (GeV) to tune conversion
     """
     return a_g * e * energy * 1e9 / (m_e * c**2)
-
+# ------------------------------------------------------------------------------------------------------
 def model(x, x0, s, A, c):
     """
     Error function fitting model
     """
     law = stats.norm(loc=x0, scale=s)
     return A * law.cdf(x) + c
-
+# ------------------------------------------------------------------------------------------------------
 def round_to_1_sigfig(value: Union[float, np.floating]) -> float:
     """
     Round to one significant figure for fitted beam energy formatting
@@ -60,6 +60,7 @@ def round_to_1_sigfig(value: Union[float, np.floating]) -> float:
         return 0
     return float(np.round(value, -int(np.floor(np.log10(abs(value)))))
 )
+# ------------------------------------------------------------------------------------------------------
 def round_to_error_sigfig(value: Union[float, np.floating], error: Union[float, np.floating]) -> float:
     """
     Round value to the same sigfigs as the error
@@ -67,8 +68,7 @@ def round_to_error_sigfig(value: Union[float, np.floating], error: Union[float, 
     if error == 0:
         return float(value)
     return float(np.round(value, -int(np.floor(np.log10(np.abs(error))))))
-
-
+# ------------------------------------------------------------------------------------------------------
 def calculate_fitted_energy_stats(energies: dict[str, float], stddevs: Union[dict[str, float], None] = None) -> tuple[float, ...]:
     """
     Calculate the mean and standard deviation of the fitted energies for all the selected sectors. 
@@ -90,7 +90,7 @@ def calculate_fitted_energy_stats(energies: dict[str, float], stddevs: Union[dic
     E0_mean_sigfig = round_to_error_sigfig(E0_mean, E0_stddev_sigfig)
             
     return E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig
-
+# ------------------------------------------------------------------------------------------------------\
 if __name__ == "__main__":
     print("_calculations.py contains helper functions for resdep.py and resdepGUI.py and should not be run directly.")
     print("Instead, use (for example): \"> from _calculations import energy_calc\".")

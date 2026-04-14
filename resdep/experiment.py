@@ -175,6 +175,7 @@ class ResonantDepolarisation():
 			print("|---------- Resonant Depolarisation ---------|")
 			print("|--------------------------------------------|")
 
+			# ---------------------------------------------------------------------------------
 			# --- Collect baseline data (BPMs)
 			end = time.time() + 10
 			if self.status_callback:
@@ -211,6 +212,7 @@ class ResonantDepolarisation():
 			if self.timer_callback:
 				self.timer_callback()
 
+			# ---------------------------------------------------------------------------------
 			# --- Sweep frequency by stepping through kicker drive frequency setpoint in loop
 			while self.step <= self.sweep_steps:
 
@@ -686,12 +688,12 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def calcf_revfromMasterRF(self, ) -> None:
 		"""
-		Member function \\
 		Calculate a more accurate (real-time) f_rev based off current Master RF  
 		
-		Updates
+		Returns
 		-------
 		self.f_rev: float
+			revolution frequency
 		"""
 		# Grab masterRF from EPICS
 		# if disconnected, .get() will return none and f_rev with throw exception
@@ -700,21 +702,8 @@ class ResonantDepolarisation():
 		if masterRFact is not None:
 			self.f_rev: float = 1e-3 * masterRFact/360 	# kHz 
 		return None
-	# ----------------------------------------------------------------------------------------------------------------------------------------------------
-	def interruptible_sleep(self, seconds: int) -> bool:
-		"""
-		Sleeps over long periods of time, waking often to check states (abort for example)
-		"""
-		end = time.time() + seconds
-		while time.time() < end:
-			if self._abort_requested:
-				return True
-			# sleep quickly
-			time.sleep(0.01)
-		
-		return False
 	# -------------------------------------------------------------------------------------------------------------------------------------------------------
-	def calculate_adc_counter_windows(self, sector: int = 8) -> None:
+	def calculate_adc_counter_windows(self, sector: int = 1) -> None:
 		"""
 		Calculates the offsets and window lengths of the two counter windows for a specific sector \\
 		**Note**: this only works for one sector, since there is no way to make the ADC windows wrap around T0. \\
@@ -897,6 +886,10 @@ class ResonantDepolarisation():
 			# timestamps as txt
 			with open(self.data_path / 'timestamps.txt', 'w') as f:
 					for value in self.timestamps_str:
+						f.write(value + '\n')
+			# slow timestamps as txt
+			with open(self.data_path / 'slow_timestamps.txt', 'w') as f:
+					for value in self.slow_timestamps_str:
 						f.write(value + '\n')
 
 			# adc counter loss 1
@@ -1119,7 +1112,22 @@ class ResonantDepolarisation():
 		"""
 		self._abort_requested = True
 		return None
-
+	# *--------------------------------* #
+	# *----------- Utilities ----------* #
+	# *--------------------------------* #
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def interruptible_sleep(self, seconds: int) -> None:
+		"""
+		Sleeps over long periods of time, waking often to check states (abort for example)
+		"""
+		end = time.time() + seconds
+		while time.time() < end:
+			if self._abort_requested:
+				return None
+			# sleep quickly
+			time.sleep(0.01)
+		
+		return None
 if __name__ == "__main__":
 	print("resdep.py contains a class file ResonantDepolarisation which ideally should be instanced in a top-level script and not directly run.")
 	response = input("Do you want to run it directly? (y/n): ")
