@@ -1,9 +1,16 @@
 """
 Functions for calculating beam energy and related
 """
+"""
+ ██████╗ █████╗ ██╗      ██████╗██╗   ██╗██╗      █████╗ ████████╗██╗ ██████╗ ███╗   ██╗███████╗
+██╔════╝██╔══██╗██║     ██╔════╝██║   ██║██║     ██╔══██╗╚══██╔══╝██║██╔═══██╗████╗  ██║██╔════╝
+██║     ███████║██║     ██║     ██║   ██║██║     ███████║   ██║   ██║██║   ██║██╔██╗ ██║███████╗
+██║     ██╔══██║██║     ██║     ██║   ██║██║     ██╔══██║   ██║   ██║██║   ██║██║╚██╗██║╚════██║
+╚██████╗██║  ██║███████╗╚██████╗╚██████╔╝███████╗██║  ██║   ██║   ██║╚██████╔╝██║ ╚████║███████║
+ ╚═════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
+"""
 from typing import Union, overload
 import numpy as np
-from scipy import stats
 
 # --- Constants
 g 			: float = 2.0023193043609236
@@ -45,13 +52,6 @@ def tune_calc(energy: float) -> float:
     """
     return a_g * e * energy * 1e9 / (m_e * c**2)
 # ------------------------------------------------------------------------------------------------------
-def model(x, x0, s, A, c):
-    """
-    Error function fitting model
-    """
-    law = stats.norm(loc=x0, scale=s)
-    return A * law.cdf(x) + c
-# ------------------------------------------------------------------------------------------------------
 def round_to_1_sigfig(value: Union[float, np.floating]) -> float:
     """
     Round to one significant figure for fitted beam energy formatting
@@ -68,29 +68,8 @@ def round_to_error_sigfig(value: Union[float, np.floating], error: Union[float, 
     if error == 0:
         return float(value)
     return float(np.round(value, -int(np.floor(np.log10(np.abs(error))))))
-# ------------------------------------------------------------------------------------------------------
-def calculate_fitted_energy_stats(energies: dict[str, float], stddevs: Union[dict[str, float], None] = None) -> tuple[float, ...]:
-    """
-    Calculate the mean and standard deviation of the fitted energies for all the selected sectors. 
-    """
 
-    E0_mean = float(np.mean(list(energies.values())))
-    
-    if len(energies) == 0: 
-        raise KeyError("dict \"energies\" contains no data.")
-    elif len(energies) == 1:
-        if stddevs is None:
-            raise TypeError("Only one fitted energy, but no standard deviation passed. (stddevs=None)")
-        else:
-            E0_stddev = float(2*list(stddevs.values())[0])
-    else:
-        E0_stddev = float(2*np.std(list(energies.values())))
-    
-    E0_stddev_sigfig = round_to_1_sigfig(E0_stddev)
-    E0_mean_sigfig = round_to_error_sigfig(E0_mean, E0_stddev_sigfig)
-            
-    return E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig
-# ------------------------------------------------------------------------------------------------------\
+
 if __name__ == "__main__":
     print("_calculations.py contains helper functions for resdep.py and resdepGUI.py and should not be run directly.")
     print("Instead, use (for example): \"> from _calculations import energy_calc\".")

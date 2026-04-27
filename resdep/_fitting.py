@@ -3,75 +3,43 @@ Class mixins (not general) for resdepGUI related to fitting curves to the data g
 
 ONLY for use (import) in resdepGUI
 """
-
-from typing import Union, Protocol, TYPE_CHECKING
+"""
+███████╗██╗████████╗████████╗██╗███╗   ██╗ ██████╗ 
+██╔════╝██║╚══██╔══╝╚══██╔══╝██║████╗  ██║██╔════╝ 
+█████╗  ██║   ██║      ██║   ██║██╔██╗ ██║██║  ███╗
+██╔══╝  ██║   ██║      ██║   ██║██║╚██╗██║██║   ██║
+██║     ██║   ██║      ██║   ██║██║ ╚████║╚██████╔╝
+╚═╝     ╚═╝   ╚═╝      ╚═╝   ╚═╝╚═╝  ╚═══╝ ╚═════╝ 
+"""
+from typing import TYPE_CHECKING
 import logging, traceback
-import builtins
 import numpy as np
 import numpy.typing as npt
-from scipy import optimize
+from scipy import optimize, stats
 
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QMessageBox
-)
-
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-
-from resdep.experiment import ResonantDepolarisation
-from resdep._calculations import energy_calc, freq_calc, model
-
+from resdep._calculations import energy_calc, round_to_1_sigfig, round_to_error_sigfig
 if TYPE_CHECKING:
-    class HasValueProtocol(Protocol):
-        @property
-        def freqs_array(self) -> npt.NDArray[np.float64]: ...
-        @property 
-        def checked_sectors(self) -> list[str]: ...
-        @checked_sectors.setter
-        def checked_sectors(self, value) -> list[str]: ...
-        @property
-        def sectors(self) -> list[str]: ...
-        @sectors.setter
-        def sectors(self, value) -> list[str]: ...
-        @property
-        def ratio_loss(self,) -> dict[str, npt.NDArray[np.float64]]: ...
-        @ratio_loss.setter
-        def ratio_loss(self, value) -> dict[str, npt.NDArray[np.float64]]: ...
-        @property
-        def canvas(self) -> FigureCanvasQTAgg: ...
-        @canvas.setter
-        def canvas(self, value) -> FigureCanvasQTAgg: ...
-        @property
-        def resdep(self) -> ResonantDepolarisation: ...
-        @resdep.setter
-        def resdep(self, value) -> ResonantDepolarisation: ...
-else:
-    class HasValueProtocol: ...
+    from resdep.experiment import ResonantDepolarisation, ProcessedData
 
 
-class Mixin(HasValueProtocol):
 
-    def calculate_fitting_mask(self) -> tuple[list[bool], tuple[np.floating], tuple[np.floating]]:
+class FittingClass():
+    """
+    Fitting class for resdep. Fits error functions to ratio loss data
+    """
+    def __init__(self, resdep: "ResonantDepolarisation", processed_data: "ProcessedData"):
+        self.resdep         = resdep
+        self.processed_data = processed_data
+    # ------------------------------------------------------------------------------------------------------
+    def model(self, x, mean, scaling_factor, amplitude, offset):
         """
-        Grabs the current limits of the interactive plot (including when it is zoomed in) and calculates the frequency range displayed. \\
-        This is then used as a mask to fit error functions in fit_error_functions()
-
-        Returns
-        -------
-        mask: list[bool]
-            Binary mask for the frequency range shown in the interactive plot
-        xlims: tuple[np.float64]
-            Current x-limits (range) of the interactive plot
-        ylims: tuple[np.float64]
-            Same for y as for x
+        Error function fitting model
         """
-        xlims = self.canvas.axes.get_xlim() # tuple[lower_bound, upper_bound]
-        ylims = self.canvas.axes.get_ylim()
-        mask = np.logical_and(self.freqs_array > xlims[0], self.freqs_array < xlims[1])
+        law = stats.norm(loc=mean, scale=scaling_factor)
 
-        return mask, xlims, ylims
-
-    def fit_error_functions(self, mask: Union[list[bool], "builtins.ellipsis"] = ...) -> tuple[dict[str, npt.NDArray[np.floating]], dict[str, float], dict[str, float], str]:
+        return amplitude * law.cdf(x) + offset
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def fit_error_functions(self, ) -> tuple[dict[str, npt.NDArray[np.floating]], dict[str, float], dict[str, float], str]:
         """
         Fits an error function to the ratio beam loss data. \\
         Does this for every checked sector on the GUI
@@ -92,23 +60,25 @@ class Mixin(HasValueProtocol):
         """
 
         # fit results dicts
-        y_model: dict[str, npt.NDArray[np.float64]] = {}
-        fitted_beam_energy_frequencies: dict[str, float] = {}
-        fitted_beam_energies: dict[str, float] = {}
-        fitted_beam_energy_stddevs: dict[str, float] = {}
-        fit_results: str = ""
+        y_model                         : dict[str, npt.NDArray[np.float64]]    = {}
+        fitted_beam_energy_frequencies  : dict[str, float]                      = {}
+        fitted_beam_energies            : dict[str, float]                      = {}
+        fitted_beam_energy_stddevs      : dict[str, float]                      = {}
+        fit_results                     : str                                   = ""
+        
+        mask = self.processed_data.mask
 
-        for sector in self.checked_sectors:
+        for sector in self.processed_data.sectors_to_fit:
             try:
                 # --- calculate fit
                 popt, pcov = optimize.curve_fit(
-                    f       = model, 
-                    xdata   = self.freqs_array[mask], 
-                    ydata   = self.ratio_loss[f"{sector}B"][mask], 
+                    f       = self.model, 
+                    xdata   = self.processed_data.freqs_array[mask], 
+                    ydata   = self.processed_data.ratio_loss[f"{sector}B"][mask], 
                     p0      = [self.resdep.res_freq, 0.2, 0.04, 1],
                     maxfev  = 8000
                 )
-                y_model[f"{sector}B"] = model(self.freqs_array[mask], *popt)
+                y_model[f"{sector}B"] = self.model(self.processed_data.freqs_array[mask], *popt)
 
                 mean_freq       = popt[0]
                 mean_energy     = energy_calc(freq=mean_freq, f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic)
@@ -124,9 +94,9 @@ class Mixin(HasValueProtocol):
 
                 # -- calculate goodness of fit
                 # residual sum of squares
-                ss_res = np.sum((self.ratio_loss[f"{sector}B"][mask] - y_model[f"{sector}B"])**2)
+                ss_res = np.sum((self.processed_data.ratio_loss[f"{sector}B"][mask] - y_model[f"{sector}B"])**2)
                 # total sum of squares
-                ss_tot = np.sum((self.ratio_loss[f"{sector}B"][mask] - np.mean(self.ratio_loss[f"{sector}B"][mask]))**2)
+                ss_tot = np.sum((self.processed_data.ratio_loss[f"{sector}B"][mask] - np.mean(self.processed_data.ratio_loss[f"{sector}B"][mask]))**2)
                 # r-squared
                 r2 = 1 - (ss_res / ss_tot)
 
@@ -139,8 +109,41 @@ class Mixin(HasValueProtocol):
     
         print(f"fitted_beam_energy_stddevs={fitted_beam_energy_stddevs}")
 
+        # pass to processed_data:
+        self.processed_data.y_model                     = y_model
+        self.processed_data.fitted_beam_energies        = fitted_beam_energies
+        self.processed_data.fitted_beam_energy_stddevs  = fitted_beam_energy_stddevs
+        self.processed_data.fit_results                 = fit_results
+
         return y_model, fitted_beam_energies, fitted_beam_energy_stddevs, fit_results
-    
+    # ------------------------------------------------------------------------------------------------------
+    def calculate_fitted_energy_stats(self, ) -> tuple[float, ...]:
+        """
+        Calculate the mean and standard deviation of the fitted energies for all the selected sectors. 
+        """
+
+        energies    = self.processed_data.fitted_beam_energies
+        stddevs     = self.processed_data.fitted_beam_energy_stddevs
+
+        E0_mean: float = float(np.mean(list(energies.values())))
+        
+        if len(energies) == 0: 
+            raise KeyError("dict \"energies\" contains no data.")
+        elif len(energies) == 1:
+            E0_stddev: float = float(2*list(stddevs.values())[0])
+        else:
+            E0_stddev: float = float(2*np.std(list(energies.values())))
+        
+        E0_stddev_sigfig: float = round_to_1_sigfig(E0_stddev)
+        E0_mean_sigfig  : float = round_to_error_sigfig(E0_mean, E0_stddev_sigfig)
+
+        self.processed_data.E0_mean             = E0_mean
+        self.processed_data.E0_stddev           = E0_stddev
+        self.processed_data.E0_mean_sigfig      = E0_mean_sigfig
+        self.processed_data.E0_stddev_sigfig    = E0_stddev_sigfig
+                
+        return E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def automagic_fit(self, ) -> None:
         """
         Calculates best guess for resonance in the data (based off derivative cdf -> gauss) \\
@@ -161,4 +164,4 @@ class Mixin(HasValueProtocol):
     
 
 if __name__ == "__main__":
-    print("_fitting.py contains class mixin functions for resdepGUI.py and should not be run directly.")
+    print("_fitting.py contains class functions for resdep GUIs and should not be run directly.")

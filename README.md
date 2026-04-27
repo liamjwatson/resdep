@@ -21,7 +21,7 @@ Beam energy diagnostic tool using resonant depolarisation at the Australian Sync
 `uv pip install -e .`
 
 For installation on OPIs:
-1. Clone the latest **tag**, which contains the latest source distribution (`.tar.gz` file) and corresponding binary distribution (wheel, `.whl` file) in `./dist`.
+1. Clone the latest **tag**, which contains the latest source distribution (`.tar.gz` file) and corresponding wheel (`.whl` file) in `./dist`.
 2. Either:  
 a. **execute** `install_resdep.sh`, *or* \
 b. Inside the folder, **run** \
@@ -30,9 +30,13 @@ where you replace `$WHEEL_FILE_NAME` with the name of the `.whl` file.
 
 ## Usage
 
+- `simpleGUI` for general / routine measurements (contains lots of checks to not disturb normal operator and use beam operations)  
+- `resdepGUI` for machine studies / overrides 
+
 **run** in `python`: \
 `from resdep import resdepGUI`\
-`resdepGUI.spawn()`
+`resdepGUI.spawn()` \
+<small>the same syntax is uesd for `simpleGUI`.</small> 
 
 Without `pip install`, running as a script from the repo root: \
 `ipython3 -m resdep.resdepGUI`
@@ -40,16 +44,11 @@ Without `pip install`, running as a script from the repo root: \
 
 ## Description
 
-Sweeps the kicker drive frequency over a specified range and records beam loss on all the beam loss monitors (BLMs).
-
-Current capabilities
-- Sweeps kicker at up to 20 Hz, PV readback at 20 Hz (as fast as the network allows really)
-- Fails-safe on keyboard.interrupt (reset drive amplitude to 0, takes out scrapers, saves all the data)
-- Plots the data
+Sweeps the kicker drive frequency over a specified range (the spin tune) and records beam loss on all the beam loss monitors (BLMs). Fail-safes built into the GUIs. Saves data to `\asp\usr\data\resdep` (not to be confused with `\rdp`.) Records LCW and tunnel temperatures to correlate with beam energy (long-term) drift.
 
 ## Physics
 
-[Complete physics description found here](https://confluence.synchrotron.org.au/confluence/display/AP/Resonant+Depolarisation)
+[Complete physics description found here (AS internal use only)](https://confluence.synchrotron.org.au/confluence/display/AP/Resonant+Depolarisation)
 
 An accurate measurement (keV resolution) of the beam energy based on the electron polarisation resulting from synchrotron radiation.
 - Electrons in the storage ring are polarised parallel or anti-parallel to the dipole magnet field direction (up)

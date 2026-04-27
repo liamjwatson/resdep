@@ -1,5 +1,16 @@
+"""
+Classes for beam position monitors (BPMs)
+"""
+"""
+██████╗ ███████╗ █████╗ ███╗   ███╗    ██████╗  ██████╗ ███████╗██╗████████╗██╗ ██████╗ ███╗   ██╗    ███╗   ███╗ ██████╗ ███╗   ██╗██╗████████╗ ██████╗ ██████╗ ███████╗
+██╔══██╗██╔════╝██╔══██╗████╗ ████║    ██╔══██╗██╔═══██╗██╔════╝██║╚══██╔══╝██║██╔═══██╗████╗  ██║    ████╗ ████║██╔═══██╗████╗  ██║██║╚══██╔══╝██╔═══██╗██╔══██╗██╔════╝
+██████╔╝█████╗  ███████║██╔████╔██║    ██████╔╝██║   ██║███████╗██║   ██║   ██║██║   ██║██╔██╗ ██║    ██╔████╔██║██║   ██║██╔██╗ ██║██║   ██║   ██║   ██║██████╔╝███████╗
+██╔══██╗██╔══╝  ██╔══██║██║╚██╔╝██║    ██╔═══╝ ██║   ██║╚════██║██║   ██║   ██║██║   ██║██║╚██╗██║    ██║╚██╔╝██║██║   ██║██║╚██╗██║██║   ██║   ██║   ██║██╔══██╗╚════██║
+██████╔╝███████╗██║  ██║██║ ╚═╝ ██║    ██║     ╚██████╔╝███████║██║   ██║   ██║╚██████╔╝██║ ╚████║    ██║ ╚═╝ ██║╚██████╔╝██║ ╚████║██║   ██║   ╚██████╔╝██║  ██║███████║
+╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝    ╚═╝      ╚═════╝ ╚══════╝╚═╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═══╝    ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝
+"""
 from abc import ABC, abstractmethod
-from typing import cast, Any, Callable, Union
+from typing import Any, Callable, Union
 from pathlib import Path
 import warnings
 import logging, traceback
@@ -72,16 +83,19 @@ class BPMs(ABC):
         Calculates yaw (angle in *x*) and pitch (angle in *y*) between each BPM in *micro radians*\\
         Schematic (angle calculated is `@`):
                   
-                   pos_1            Downstream
-            |---------x----|BPM n       |
-            |        /|    |            |
-            |       /@|    |            |
-            |      /  |    |            |
-            |     /   |    |            |
-            |    /    |    |            |
-            |   /     |    |            |
-            |--x-----------|BPM n+1     V
-             pos_2                   Upstream
+                      pos 1                       
+            ┌───────────x────┐                    
+            └───────────┬────┘BPM n     Downstream
+                       /│                   │     
+                      /@│                   │     
+                     /  │                   │     
+                    /   │                   │     
+                   /    │                   │     
+                  /     │                   │     
+                 /      │                   │     
+            ┌───▼───────▼────┐              ▼     
+            └───x────────────┘BPM n+1    Upstream 
+             pos 2                                
                 
         Parameters
         ----------
@@ -299,11 +313,11 @@ class MX3_BPMs(BPMs):
         self.position_unit_scale    = 1e-6 # m, i.e. microns
 
         bpm_pos = {
-            "1": 18575, # mm
-            "2": 26650, # mm
-            "5": 34960, # mm
-            "3": 36610, # mm, approx
-            "4": 36870  # mm, approx
+            "1": 18.575, # m
+            "2": 26.650, # m
+            "5": 34.960, # m
+            "3": 36.610, # m, approx
+            "4": 36.870  # m, approx
         }
         self.bpm_separations = {
              "1|2": bpm_pos["2"] - bpm_pos["1"],
@@ -320,12 +334,9 @@ class MX3_BPMs(BPMs):
         Load `x_position`, `y_position`, and `intensity` PVs. Also initates storage attributes (dicts) \\
         Key format: `BPM number`, e.g. `"4"` 
         
-        |-------------------- Hutch C -------------------------|-- Hutch B --|-- Hutch A --|-- SR --- \\
-        Detector <------ BPM 4 <------ BPM 3 <------ BPM 5 <------ BPM 2 <------ BPM 1 <------ Beam
+        `|-------------------- Hutch C -------------------------|-- Hutch B --|-- Hutch A --|-- SR ---` \\
+        `|Detector <-- BPM 4 <----- BPM 3 <----------- BPM 5 <------ BPM 2 <------ BPM 1 <---- Beam --`
         """
-
-        odd_BPMs  = [1, 3, 5]
-        even_BPMs = [2, 4] # alias [best0, best1]
 
         for bpm in [1, 2, 5, 3, 4]:
             if bpm % 2 == 0: # is even

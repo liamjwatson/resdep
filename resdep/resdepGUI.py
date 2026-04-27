@@ -1,10 +1,14 @@
 """
-Barebones Qt layout for running resdep experiments.
+Expert level Qt layout for running resdep experiments.
 Basically just an input panel for all the experiment sweep variables.
-Going to build in a plotting callback for the range and harmonic
-
-Future future stuff is to plot the output of the experiment which should be a PV. 
-It would be nice to plot continuously but im not sure how to do that with top-up normalisation
+"""
+"""
+ ██████╗ ██╗   ██╗██╗
+██╔════╝ ██║   ██║██║
+██║  ███╗██║   ██║██║
+██║   ██║██║   ██║██║
+╚██████╔╝╚██████╔╝██║
+ ╚═════╝  ╚═════╝ ╚═╝
 """
 
 import datetime
@@ -53,22 +57,19 @@ from PySide6.QtGui import (
     QRegularExpressionValidator
     )
 # Matplotlib dependencies
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_qt import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.figure import Figure
 from matplotlib import rcParams
 
 # resdep
-from resdep.experiment import ResonantDepolarisation
-import resdep._plotting as _plotting
-import resdep._fitting as _fitting
-from resdep._calculations import calculate_fitted_energy_stats
+from resdep.experiment import ResonantDepolarisation, ProcessedData
+from resdep._fitting import FittingClass
+from resdep._plotting import PlottingClass, Graph
 
 
 ##########################
 # -------- GUI --------- #
 ##########################
-class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
+class MainWindow(QWidget):
     """
     The Qt GUI for Resonant Depolarisation
     """
@@ -95,6 +96,12 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.resdepQt.start_timer.connect(self.on_start_timer)
         self.resdepQt.ADC_windows.connect(self.on_new_ADC_windows)
         self.resdepQt.finished.connect(self.on_finish)
+
+        # helper classes
+        sectors_to_fit = ["1", "4", "8", "11", "12", "13"]
+        self.processed_data = ProcessedData(resdep=self.resdep, sectors_to_fit=sectors_to_fit)
+        self.fitting        = FittingClass(resdep=self.resdep, processed_data=self.processed_data)
+        # ... self.plotting initialised in _init_plot_pane() due to plot canvas attribute
 
         # init path
         path = Path.cwd()
@@ -154,6 +161,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
 	# *--------------------------------* # 
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def _init_settings_pane(self, ) -> None:
+        
         # --- settings pane
         # ---------------------- #
         # |     Parameters       #
@@ -369,14 +377,15 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         plot_pane.setLayout(plot_layout)
 
         # Create canvas
-        self.canvas = PlotCanvas(self)
+        self.graph = Graph(self)
+        self.plotting = PlottingClass(resdep=self.resdep, processed_data=self.processed_data, graph=self.graph)
         # calculate range and draw plot
         self.update_expected_resonances()
         # Create toolbar, passing canvas as first parament, parent (self, the MainWindow) as second.
-        plot_toolbar = NavigationToolbar(self.canvas, self)
+        plot_toolbar = NavigationToolbar(self.graph, self)
         # add plot to pane
         plot_layout.addWidget(plot_toolbar)
-        plot_layout.addWidget(self.canvas)
+        plot_layout.addWidget(self.graph)
         # Add to top layout. Is horizontal box, so adds right
         self.top_layout.addWidget(plot_pane)
 
@@ -422,12 +431,13 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def on_new_plot_info(self, freqs: list[float], beam_loss_window_1: dict[str, list[float]], beam_loss_window_2: dict[str, list[float]]) -> None:
+    def on_new_plot_info(self, ) -> None:
         """
         Updates the GUI plot with the latest ratio loss data
         """
-        self.canvas.axes.clear()
-        self.plot_ratio_loss(freqs, beam_loss_window_1, beam_loss_window_2)
+        self.graph.axes.clear()
+        self.processed_data.calculate_ratio_loss(sigma=self.sigma.value())
+        self.plotting.plot_ratio_loss()
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -675,7 +685,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.resdep.set_adc_counter_offset_2 = self.ADC_offset_2.value()
         self.resdep.set_adc_counter_window_2 = self.ADC_window_2.value()
 
-        if self.checkbox_measure_MX3.isChecked:
+        if self.checkbox_measure_MX3.isChecked():
             self.resdep._measuring_MX3 = True
         else:
             self.resdep._measuring_MX3 = False
@@ -697,8 +707,8 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         Updates dynamically on settings pane changes.
         """
         self.update_experiment_settings()
-        self.canvas.axes.clear()
-        self.plot_expected_resonances()
+        self.graph.axes.clear()
+        self.plotting.plot_expected_resonances()
 
         return None
 
@@ -796,7 +806,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
         self.status_bar.showMessage("Status: Fitting...")
 
         checked_sector_checkboxes = cast(list[bool], [sector_checkbox.isChecked() for sector_checkbox in self.sector_checkboxes])
-        self.checked_sectors = [_sector for _sector, checked in zip(self.sectors, checked_sector_checkboxes) if checked]
+        self.sectors_to_fit = [_sector for _sector, checked in zip(self.sectors, checked_sector_checkboxes) if checked]
 
         # warn if no sectors selected and exit early
         if not any(checked_sector_checkboxes):
@@ -810,26 +820,20 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
             return None
         
         try: 
-            mask, xlims, ylims = self.calculate_fitting_mask()
-
-            self.on_new_plot_info(
-                freqs=self.resdep.freqs, 
-                beam_loss_window_1=self.resdep.beam_loss_window_1, 
-                beam_loss_window_2=self.resdep.beam_loss_window_2
-            )
-
-            y_model, fitted_beam_energies, fitted_beam_energy_stddevs, fit_results = self.fit_error_functions(mask=mask)
+            self.plotting.calculate_fitting_mask()
+            self.on_new_plot_info()
+            y_model, _, _, fit_results = self.fitting.fit_error_functions()
 
             if len(y_model) == 0: # if all fits fail
                 print("Fit results:\n", fit_results)
                 return None
 
-            if len(self.checked_sectors) > 1: # calc stddev of means if multiple fits
-                E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig = calculate_fitted_energy_stats(fitted_beam_energies) 
+            if len(self.sectors_to_fit) > 1: # calc stddev of means if multiple fits
+                _, _, E0_mean_sigfig, E0_stddev_sigfig = self.fitting.calculate_fitted_energy_stats() 
             else: # use stddev of fit if only one fit
-                E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig = calculate_fitted_energy_stats(fitted_beam_energies, fitted_beam_energy_stddevs) 
+                _, _, E0_mean_sigfig, E0_stddev_sigfig = self.fitting.calculate_fitted_energy_stats() 
 
-            self.plot_fits(y_model, E0_mean, E0_stddev, mask, xlims, ylims)
+            self.plotting.plot_fits()
             
             fitted_beam_energy_str = f"{E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stddev_sigfig*1e6:.0f} keV"
             print(f"mean E0 = {fitted_beam_energy_str}")
@@ -892,11 +896,7 @@ class MainWindow(QWidget, _plotting.Mixin, _fitting.Mixin):
             self.resdep.res_freq = self.resdep.f_rev * (self.resdep.tune + self.resdep.harmonic)
 
             # refresh plot
-            self.on_new_plot_info(
-                freqs=self.resdep.freqs,
-                beam_loss_window_1=self.resdep.beam_loss_window_1,
-                beam_loss_window_2=self.resdep.beam_loss_window_2
-            )
+            self.on_new_plot_info()
 
             # enable fit pane
             self.enable_GUI_pane(pane="fit", enable=True)
@@ -1060,32 +1060,6 @@ class QtDecorator(QObject):
         self.worker.request_abort()
         return None
 
-##########################
-# ----- Matplotlib ----- #
-# ------- canvas ------- #
-##########################
-class PlotCanvas(FigureCanvasQTAgg):
-    """
-    Spawn canvas instance object to add and modify in GUI
-    """
-    def __init__(self, parent=None, dpi=100):
-
-        # Create the figure and figure canvas
-        fig = Figure(dpi=dpi)#, constrained_layout=True)
-        self.figure = fig
-        self.canvas = FigureCanvasQTAgg(self.figure)
-        self.axes = fig.add_subplot()
-
-        # super(PlotCanvas, self).__init__(Figure())
-        super().__init__(self.figure) 
-        self.setParent(parent)
-
-    # fixed size
-    def sizeHint(self):
-        return QSize(700, 600)
-
-    def minimumSizeHint(self):
-        return QSize(700, 600)
 
 def spawn():
     app = QApplication(sys.argv)

@@ -1,6 +1,14 @@
 """
 Plot resdep data
 """
+"""
+██████╗ ██╗      ██████╗ ████████╗    ██████╗  █████╗ ████████╗ █████╗ 
+██╔══██╗██║     ██╔═══██╗╚══██╔══╝    ██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗
+██████╔╝██║     ██║   ██║   ██║       ██║  ██║███████║   ██║   ███████║
+██╔═══╝ ██║     ██║   ██║   ██║       ██║  ██║██╔══██║   ██║   ██╔══██║
+██║     ███████╗╚██████╔╝   ██║       ██████╔╝██║  ██║   ██║   ██║  ██║
+╚═╝     ╚══════╝ ╚═════╝    ╚═╝       ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
+"""
 
 from functools import partial
 from typing import Any
@@ -35,8 +43,8 @@ mu: str 	= u"\u03bc"
 
 # --- import data
 
-data_path = Path.cwd()
-data_path = data_path / "data" / "resdep" / "2026-03-30" / "2039h"
+data_path = Path("Z:/usr/data/resdep")
+data_path = data_path / "2026" / "2026-03-30" / "2116h"
 print(f"folder={data_path.name}")
 if not data_path.exists():
 	raise FileNotFoundError("Incorrect path")
@@ -343,13 +351,13 @@ def plot_ratio_loss() -> None:
 
 	if do_fit:
 		# calculate 2* st.dev
-		f_rdp_mean = np.mean(np.array(list(fitted_beam_energy_frequencies.values())))
-		E0_mean = np.mean(np.array(list(fitted_beam_energies.values())))
-		E0_stdev = 2*np.std(np.array(list(fitted_beam_energies.values())))
-		E0_stdev_sigfig = round_to_1_sigfig(E0_stdev)
-		E0_mean_sigfig = np.round(E0_mean, -int(np.floor(np.log10(abs(E0_stdev)))))
-		sideband_energy_shift = E0_mean - energy_calc(f_rdp_mean - f_rev*v_synch, f_rev, harmonic)
-		expected_sidebands = [energy_calc(f_rdp_mean - 11.756, f_rev, harmonic), energy_calc(f_rdp_mean + f_rev*v_synch, f_rev, harmonic)]
+		f_rdp_mean 				= np.mean(np.array(list(fitted_beam_energy_frequencies.values())))
+		E0_mean 				= np.mean(np.array(list(fitted_beam_energies.values())))
+		E0_stdev 				= 2*np.std(np.array(list(fitted_beam_energies.values())))
+		E0_stdev_sigfig 		= round_to_1_sigfig(E0_stdev)
+		E0_mean_sigfig 			= np.round(E0_mean, -int(np.floor(np.log10(abs(E0_stdev)))))
+		sideband_energy_shift 	= E0_mean - energy_calc(f_rdp_mean - f_rev*v_synch, f_rev, harmonic)
+		expected_sidebands 		= [energy_calc(f_rdp_mean - 11.756, f_rev, harmonic), energy_calc(f_rdp_mean + f_rev*v_synch, f_rev, harmonic)]
 
 		print(f"mean E0 = {E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stdev_sigfig*1e6:.0f} keV")
 
@@ -441,7 +449,7 @@ def plot_SR_BPMs_around_kicker() -> None:
 	axs[1].set_title("y_position change")
 	for ax in [0,1]:
 		axs[ax].legend()
-		axs[ax].set_xlabel("minutes")
+		axs[ax].set_xlabel("Time (minutes)")
 		axs[ax].set_ylabel("nm")
 
 	shade_kicker_off(axs)
@@ -481,7 +489,7 @@ def plot_SR_BPMs_around_kicker() -> None:
 	axs[1].set_title("change in pitch")
 	for ax in [0,1]:
 		axs[ax].legend()
-		axs[ax].set_xlabel("minutes")
+		axs[ax].set_xlabel("Time (minutes)")
 		axs[ax].set_ylabel(f"{mu}rad")
 
 	shade_kicker_off(axs)
@@ -618,6 +626,31 @@ def plot_MX3_BPMs() -> None:
 		for line in mx3_deviations:
 			f.write(line + "\n")
 	
+	mx3_intensity_changes: list[str] = []
+	print("---Intensity change (std.dev/mean (%)) on MX3---")
+	for bpm, intensity in mx3_bpms.intensity.items():
+		intensity 			= np.array(intensity) 	# nA
+		intensity_mean 		= np.mean(intensity)	# nA
+		intensity_stddev 	= np.std(intensity)		# nA
+		intensity_change 	= 100 * intensity_stddev/intensity_mean # %
+		intensity_change_str= f"MX3 BPM {bpm}: {intensity_change:+0.2f} %"
+		print(intensity_change_str)
+		mx3_intensity_changes.append(intensity_change_str)
+
+	# save deviations .txt
+	with open(mx3_path / "intensity_changes.txt", "w", encoding="utf-8") as f:
+		for line in mx3_intensity_changes:
+			f.write(line + "\n")
+
+	# # absolute intensity change
+	# print("---Max deviations in INTENSITY on MX3 (% of mean)---")
+	# for bpm, intensity in mx3_bpms.intensity.items():
+	# 	intensity_array			= np.array(intensity)
+	# 	intensity_maxabs 		= np.max(np.abs(intensity))
+	# 	intensity_deviation 	= 100 - 100 * np.mean(intensity_array[:100]) / intensity_maxabs 
+	# 	intensity_deviation_str = f"MX3 BPM {bpm}: {intensity_deviation:+0.2f} %"
+	# 	print(intensity_deviation_str)
+
 	# --- plots x_pos, y_pos, intensity
 	fig, axs = plt.subplots(3, 1, figsize=(5,10), layout="constrained")
 	fig.suptitle(f"MX3 BPMs")
@@ -662,15 +695,16 @@ def plot_MX3_BPMs() -> None:
 	# Third plot (intensity)
 	axs[2].set_ylabel(r"nA")
 	axs[2].set_xlabel(r"Time (minutes)")
-	axs[2].tick_params("x", rotation=90)
 	
-	plt.savefig(mx3_path / "all_MX3_DBPM_positions.png", dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+	plt.savefig(mx3_path / "MX3_PDS_positions.png", dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
 	# --- angle
 	yaw, pitch = mx3_bpms.calculate_angles()
 
 	fig, axs = plt.subplots(nrows=2, ncols=1, figsize=(5,8), layout="compressed")
 	fig.suptitle("Steer through MX3 PDS")
+
+	inset: bool = False
 
 	for index, angle in enumerate([yaw, pitch]):
 		for bpms_index, bpms in enumerate(angle):
@@ -680,10 +714,11 @@ def plot_MX3_BPMs() -> None:
 				minutes, 
 				angle_change,
 				color=color[bpms_index+1],
+				alpha=0.9,
 				label=bpms,
 				linewidth=1	
 			)
-			if bpms == "3|4":
+			if inset and bpms == "3|4":
 				axs_inset = inset_axes(axs[index], width="30%", height="30%", loc="upper center")
 				axs_inset.plot(
 				minutes, 
@@ -707,7 +742,7 @@ def plot_MX3_BPMs() -> None:
 	axs[1].set_title("change in pitch")
 	for ax in axs:
 		ax.legend(ncols=2, fontsize=9, handlelength=1, loc="upper right")
-		ax.set_xlabel("minutes")
+		ax.set_xlabel("Time (minutes)")
 		ax.set_ylabel(f"{mu}rad")
 
 	shade_kicker_off(axs)
@@ -730,7 +765,7 @@ def plot_MX3_at_sample() -> None:
 		data = getattr(mx3_bpms, attribute)[bpm]
 		data = np.array(data) - np.mean(data[:100])
 		axs[index].plot(minutes, data, linewidth=1, color="purple")
-		axs[index].set_xlabel("minutes")
+		axs[index].set_xlabel("Time (minutes)")
 		axs[index].set_ylabel(r"$\mu$m")
 		axs[index].set_title(f"{attribute} change")
 
@@ -811,5 +846,5 @@ def shade_kicker_off(axes, label: bool = True) -> None:
 
 if __name__ == "__main__":
 	# plot_SR_BPMs_around_kicker()
-	plot_SR_BPMs_around_MX3_IVU()
-	# plot_MX3_BPMs()
+	# plot_SR_BPMs_around_MX3_IVU()
+	plot_MX3_BPMs()
