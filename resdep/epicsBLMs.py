@@ -11,7 +11,7 @@ Classes for beam loss monitors (BLMs)
 """
 
 from typing import Any, Union, Literal
-import traceback
+import logging, traceback
 import datetime
 import json
 import warnings
@@ -109,10 +109,22 @@ class BLMs:
         Loads all loss PVs (regular slow acquisition [SA] and loss from the two ADC counter masks)
         from all sectors and returns dictionaries (of PVs) \\
         Keys for each dictionary are of the form: {sector}{section}... \\
-        *e.g.* '11A' 
+        *e.g.* '11A'
+
+        ## Key attributes
+         
+        :attr:`loss`
+            Slow acquisition loss PVs
+        :attr:`adc_counter_loss_1`
+            Slow acquisition loss PV on counter stream 1
+        :attr:`adc_counter_loss_2`
+            Slow acquisition loss PV on counter stream 2
+        :attr:`integrated_buffer_loss`
+            Integrated turn by turn loss PV \\
+            Outputs `SUM_DEC=86` points which correspond to one full revolution
         """
 
-        print("Grabbing loss PVs...")
+        logging.info("Grabbing loss PVs...")
 
         # grab PVs in loop
         for sector in range(1,14+1,1):
@@ -132,9 +144,25 @@ class BLMs:
         Loads all adc counter masks (offset + window -- 1 & 2) PVs from all sectors and returns dictionaries (of PVs) \\
         Keys for each dictionary are of the form: {sector}... \\
         *e.g.* '11A' 
+
+        ## Key attributes
+
+        :attr:`adc_counter_offset_1`
+            PV for offset in the counter stream 1 window. \\
+            Units are ADC cycles, from `0` to `SUM_DEC-1`. \\
+            Identical PV for stream 2 (:attr:`adc_counter_offset_2`)
+        :attr:`adc_counter_window_1`
+            PV for the length of the counter stream 1 window.
+            Units are ADC cycles, from `1` to `SUM_DEC`. \\
+            Identical PV for stream 2 (:attr:`adc_counter_window_2`)
+        :attr:`counting_mode`
+            PV for counting mode on counter streams. \\
+            0 = differential (change between counts), 1 = normal (threshold counts)
+        :attr:`threshold_count_diff`
+            PV for threshold between comparitive counts in differential mode to register loss event. 
         """
 
-        print("Grabbing adc_counter_mask_PVs...")
+        logging.info("Grabbing adc_counter_mask_PVs...")
 
         # grab PVs in loop
         for sector in range(1,14+1,1):
@@ -157,13 +185,15 @@ class BLMs:
         Loads all initial ADC counter mask settings from all sectors and returns dictionaries (of values) \\
         Keys for each dictionary are of the form: {sector}{section}... \\
         *e.g.* '4B' 
+
+
         """
 
-        print("Grabbing adc_counter_mask initial values...")
+        logging.info("Grabbing adc_counter_mask initial values...")
 
         # Check state, dont want to grab inits if they've already been changed
         if self._got_init_adc_counter_masks:
-            print('Call to get_init_counter_masks() STOPPED - already called, will overwrite initital values.')
+            logging.warning('Call to get_init_counter_masks() STOPPED - already called, will overwrite initital values.')
             return None 
 
         if not self._got_adc_counter_mask_PVs:
@@ -209,7 +239,7 @@ class BLMs:
             Loss count mode for (specifically) the ADC counter masks. \\
             0: differential, 1: normal (thresholding)
         """
-        print("Applying ADC counter masks...")
+        logging.info("Applying ADC counter masks...")
 		# apply liberaBLM ADC windows
         for key in self.adc_counter_window_1:
             self.adc_counter_offset_1[key].put(offset_1, use_complete=True)
@@ -228,7 +258,7 @@ class BLMs:
 			):
                 time.sleep(0.01)
        
-        print("ADC counter masks applied!")
+        logging.info("ADC counter masks applied!")
 
         return None
     # ----------------------------------------------------------------------------------------------------------
@@ -260,7 +290,7 @@ class BLMs:
 
         # Check state, dont want to grab inits if they've already been changed
         if self._got_init_sumdec_adc_masks:
-            print('Call to get_init_sumdec_adc_masks() STOPPED - already called, will overwrite initital values.')
+            logging.warning('Call to get_init_sumdec_adc_masks() STOPPED - already called, will overwrite initital values.')
             return None 
 
         if not self._got_sumdec_adc_mask_PVs:
@@ -290,11 +320,11 @@ class BLMs:
 
         # Check state, dont want to grab inits if they've already been changed
         if self._got_decimation:
-            print('Call to get_decimation() STOPPED - already called, will overwrite initital values.')
+            logging.warning('Call to get_decimation() STOPPED - already called, will overwrite initital values.')
             return None 
         
         # grab PVs
-        print("Grabbing decimation PVs...")
+        logging.info("Grabbing decimation PVs...")
         for sector in range(1,14+1,1):
             # Sets the decimation factor from ADC to SUM (Setting range [16, 4096])
             # sanity check to make sure we set ADC offset through full range
@@ -311,7 +341,7 @@ class BLMs:
         time.sleep(2)
 
         # grab init values
-        print("Grabbing decimation inital values...")
+        logging.info("Grabbing decimation inital values...")
         for key in self.t0_interval_expected:
             self.init_sum_decimation[key] = self.sum_decimation[key].get()
             time.sleep(self.__wait_time)
@@ -324,7 +354,7 @@ class BLMs:
         
 
         # update state
-        print("Done with decimation (got PVs and inits)!")
+        logging.info("Done with decimation (got PVs and inits)!")
         self._got_decimation = True
 
         # return
@@ -336,7 +366,7 @@ class BLMs:
         """
 
         if not self._got_decimation:
-            print("No loaded decimation PVs or inital values. Fetching now...")
+            logging.warning("No loaded decimation PVs or inital values. Fetching now...")
             self.get_decimation()
 
         # update flag for put_complete
@@ -354,7 +384,7 @@ class BLMs:
                 while not PV.put_complete:
                     time.sleep(self.__wait_time)
 
-        print("Full decimation applied!")
+        logging.info("Full decimation applied!")
 
         return None
     # ----------------------------------------------------------------------------------------------------------
@@ -368,10 +398,10 @@ class BLMs:
         different locations around the ring.
         """
 
-        print("Getting T2 trigger delays...")
+        logging.info("Getting T2 trigger delays...")
 
         if self._got_t2_trigger_delays:
-            print("Already loaded ")
+            logging.debug("Already loaded.")
             return None
         
         self.default_t2_trigger_delays = {
@@ -437,7 +467,7 @@ class BLMs:
 
         # Check state, dont want to grab inits if they've already been changed
         if self._got_init_settings:
-            print('Call to get_init_settings() STOPPED - already called, will overwrite initital values.')
+            logging.warning('Call to get_init_settings() STOPPED - already called, will overwrite initital values.')
             return None 
 
         if not self._got_settings_PVs:
@@ -477,10 +507,10 @@ class BLMs:
         if mode == "adc_counter_masks":
             # check for loaded inits
             if not self._got_init_adc_counter_masks:
-                print(f"No {mode} inits loaded, restoration failed!")
+                logging.error(f"No {mode} inits loaded, restoration failed!")
                 return None
             # restore inits
-            print("Restoring adc_counter_masks...")
+            logging.info("Restoring adc_counter_masks...")
             for key in self.adc_counter_offset_1:
                 self.adc_counter_offset_1[key].put(self.init_adc_counter_offset_1[key], use_complete=True)
                 self.adc_counter_window_1[key].put(self.init_adc_counter_window_1[key], use_complete=True)
@@ -502,15 +532,15 @@ class BLMs:
             for key in self.threshold_count_diff:
                 while not self.threshold_count_diff[key].put_complete:
                     time.sleep(self.__wait_time)
-            print("adc_counter_masks restored to initial values!")
+            logging.info("adc_counter_masks restored to initial values!")
 
         elif mode == "sumdec_adc_masks":
             # check for loaded inits
             if not self._got_init_sumdec_adc_masks:
-                print(f"No {mode} inits loaded, restoration failed!")
+                logging.error(f"No {mode} inits loaded, restoration failed!")
                 return None
             # restore inits
-            print("Restoring SUM_DEC ADC masks...")
+            logging.info("Restoring SUM_DEC ADC masks...")
             for key in self.sumdec_adc_mask_offset:
                 self.sumdec_adc_mask_offset[key].put(self.init_sumdec_adc_mask_offset[key], use_complete=True)
                 self.sumdec_adc_mask_window[key].put(self.init_sumdec_adc_mask_window[key], use_complete=True)
@@ -521,15 +551,15 @@ class BLMs:
                     self.sumdec_adc_mask_window[key].put_complete]
                 ):
                     time.sleep(self.__wait_time)
-            print("Restored SUM_DEC ADC masks!")
+            logging.info("Restored SUM_DEC ADC masks!")
 
         elif mode == "decimation":
             # check for loaded inits
             if not self._got_decimation:
-                print(f"No {mode} inits loaded, restoration failed!")
+                logging.error(f"No {mode} inits loaded, restoration failed!")
                 return None
             # restore inits
-            print("Restoring decimation settings...")
+            logging.info("Restoring decimation settings...")
             for key in self.sum_decimation:
                 self.sum_decimation[key].put(self.init_sum_decimation[key], use_complete=True)
                 self.t0_interval[key].put(self.init_t0_interval[key], use_complete=True)
@@ -542,15 +572,15 @@ class BLMs:
                     self.t0_interval_expected[key].put_complete]
                 ):
                     time.sleep(self.__wait_time)
-            print("Restored decimation!")
+            logging.info("Restored decimation!")
 
         elif mode == "settings":
             # check for loaded inits
             if not self._got_init_settings:
-                print(f"No {mode} inits loaded, restoration failed!")
+                logging.error(f"No {mode} inits loaded, restoration failed!")
                 return None
             # restore inits
-            print("Restoring blm settings...")
+            logging.info("Restoring blm settings...")
             self.mode.put(self.init_mode, use_complete=True)
             for key in self.Vgc:
                 self.Vgc[key].put(self.init_Vgc[key], use_complete=True)
@@ -568,10 +598,10 @@ class BLMs:
                     self.decay_att[key].put_complete]
                 ):
                     time.sleep(self.__wait_time)
-            print("blm settings restored to initial values!")
+            logging.info("blm settings restored to initial values!")
 
         else:
-            print(f"Invalid restore mode! No inits resotred.\nYour input -- > mode={mode}.")
+            logging.error(f"Invalid restore mode! No inits resotred.\nYour input -- > mode={mode}.")
 
         return None
     # ----------------------------------------------------------------------------------------------------------
@@ -614,7 +644,7 @@ class BLMs:
             self._got_init_adc_counter_masks or self._got_sector11
         ]
         if all(conditions):
-            print("saving adc_counter_masks to json...")
+            logging.info("saving adc_counter_masks to json...")
             with open(inits_path / 'init_adc_counter_offset_1.json', 'w') as f:
                 json.dump(self.init_adc_counter_offset_1, f)
             with open(inits_path / 'init_adc_counter_window_1.json', 'w') as f:
@@ -632,7 +662,7 @@ class BLMs:
             self._got_init_adc_counter_masks or self._got_sector11
         ]
         if all(conditions):
-            print("saving blm settings to json...")
+            logging.info("saving blm settings to json...")
             with open(inits_path / 'init_mode.json', 'w') as f:
                 json.dump(self.init_mode, f)
             with open(inits_path / 'init_Vgc.json', 'w') as f:
@@ -646,7 +676,9 @@ class BLMs:
         elif not any([self._got_init_adc_counter_masks, self._got_sector11]):
             warnings.warn("Asked to write blm settings to json, but no inits loaded.")
 
-        return print("All loaded inits written to JSON!")
+        logging.info("All loaded inits written to JSON!")
+
+        return None 
     # ----------------------------------------------------------------------------------------------------------
     def restore_from_json(self, mode: Literal['all', 'adc_counter_masks', 'settings'], path='BLM_defaults') -> None:
         """
@@ -674,7 +706,7 @@ class BLMs:
                 self.get_adc_counter_mask_PVs()
             # Try to read each json, the restore just that PVs defaults in each try block
             # This way, if the json does not exist, we dont waste time trying to also write to PVs
-            print("reading and restoring adc_counter_masks from json...")
+            logging.info("reading and restoring adc_counter_masks from json...")
             try:
                 with open(os.path.join(path, 'init_adc_counter_offset_1.json'), 'r') as f: 
                     self.default_adc_counter_offset_1 = json.load(f)
@@ -683,7 +715,7 @@ class BLMs:
                     while self.adc_counter_offset_1[key].put_complete:
                         time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
             try:
                 with open(os.path.join(path, 'init_adc_counter_window_1.json'), 'r') as f: 
                     self.default_adc_counter_window_1 = json.load(f)
@@ -692,7 +724,7 @@ class BLMs:
                     while self.adc_counter_window_1[key].put_complete:
                         time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
             try:
                 with open(os.path.join(path, 'init_adc_counter_offset_2.json'), 'r') as f: 
                     self.default_adc_counter_offset_2 = json.load(f)
@@ -701,7 +733,7 @@ class BLMs:
                     while self.adc_counter_offset_2[key].put_complete:
                         time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
             try:
                 with open(os.path.join(path, 'init_adc_counter_window_2.json'), 'r') as f: 
                     self.default_adc_counter_window_2 = json.load(f)
@@ -710,7 +742,7 @@ class BLMs:
                     while self.adc_counter_window_2[key].put_complete:
                         time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
 
         # Check state, cant restore inits if there are none
         if any([mode == 'all', mode == 'settings']):
@@ -719,7 +751,7 @@ class BLMs:
                 self.get_settings_PVs()
             # Try to read each json, the restore just that PVs defaults in each try block
             # This way, if the json does not exist, we dont waste time trying to also write to PVs
-            print("reading and restoring blm settings from json...")
+            logging.info("reading and restoring blm settings from json...")
             try:
                 with open(os.path.join(path, 'init_mode.json'), 'r') as f: 
                     self.default_mode = json.load(f)
@@ -727,7 +759,7 @@ class BLMs:
                 while self.mode.put_complete:
                     time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
             try:
                 with open(os.path.join(path, 'init_Vgc.json'), 'r') as f: 
                     self.default_Vgc = json.load(f)
@@ -736,7 +768,7 @@ class BLMs:
                     while self.Vgc[key].put_complete:
                         time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
             try:
                 with open(os.path.join(path, 'init_att.json'), 'r') as f: 
                     self.default_att = json.load(f)
@@ -745,7 +777,7 @@ class BLMs:
                     while self.att[key].put_complete:
                         time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
             try:
                 with open(os.path.join(path, 'init_decay_Vgc.json'), 'r') as f: 
                     self.default_decay_Vgc = json.load(f)
@@ -754,7 +786,7 @@ class BLMs:
                     while self.decay_Vgc[key].put_complete:
                         time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
             try:
                 with open(os.path.join(path, 'init_decay_att.json'), 'r') as f: 
                     self.default_decay_att = json.load(f)
@@ -763,9 +795,11 @@ class BLMs:
                     while self.decay_att[key].put_complete:
                         time.sleep(self.__wait_time)
             except IOError:
-                print(traceback.format_exc())
+                logging.error(traceback.format_exc())
 
-        return print("BLM Settings restored from JSON!")
+        logging.info("BLM Settings restored from JSON!")
+
+        return None
     # ----------------------------------------------------------------------------------------------------------
     def restore_defaults(self, mode: Literal['all', 'adc_counter_masks', 'settings']) -> None:
         """
@@ -775,3 +809,8 @@ class BLMs:
         self.restore_from_json(mode=mode)
         
         return None
+
+if __name__ == "__main__":
+    print("epicsBLMs contains a class file 'BLMs' that is used to connect to PVs and store loss data for resonant depolarisation experiments.")
+    print("The class is general and can be used to detect loss on almost all available output streams.")
+    print("Run help(BLMs) after import for more details.")

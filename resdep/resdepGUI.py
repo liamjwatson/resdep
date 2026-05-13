@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Expert level Qt layout for running resdep experiments.
 Basically just an input panel for all the experiment sweep variables.
@@ -63,7 +64,7 @@ from matplotlib import rcParams
 # resdep
 from resdep.experiment import ResonantDepolarisation, ProcessedData
 from resdep._fitting import FittingClass
-from resdep._plotting import PlottingClass, Graph
+from resdep._plotting import PlottingClass, GUIGraph
 
 
 ##########################
@@ -140,7 +141,7 @@ class MainWindow(QWidget):
 
         # status bar -------------------------------- #
         self.status_bar = QStatusBar()
-        self.status_bar.showMessage("Status: Ready")
+        self.on_status_update("Ready")
 
         self._init_plot_pane()
 
@@ -377,7 +378,7 @@ class MainWindow(QWidget):
         plot_pane.setLayout(plot_layout)
 
         # Create canvas
-        self.graph = Graph(self)
+        self.graph = GUIGraph(self)
         self.plotting = PlottingClass(resdep=self.resdep, processed_data=self.processed_data, graph=self.graph)
         # calculate range and draw plot
         self.update_expected_resonances()
@@ -415,7 +416,7 @@ class MainWindow(QWidget):
         self.button_abort.setEnabled(True)
         self.button_abort.setStyleSheet("QPushButton {background-color: red;}")
         # update status bar
-        self.status_bar.showMessage("Status: Starting up...")
+        self.on_status_update("Starting up...")
             
         # call resdep
         self.thread_manager.start(self.resdepQt.run)
@@ -445,7 +446,7 @@ class MainWindow(QWidget):
         """
         Updates the GUI statues (primarily from running to sleeping on injection)
         """
-        self.status_bar.showMessage(message)
+        self.status_bar.showMessage(f"Status: {message}")
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def on_data_path_update(self, data_path: Path) -> None:
@@ -483,7 +484,7 @@ class MainWindow(QWidget):
         """
         Re-enable the run and abort buttons and settings panel widgets, update status
         """
-        self.status_bar.showMessage("Status: Experiment finished")
+        self.on_status_update("Experiment finished")
 
         # reset state
         self._abort_requested = False
@@ -760,7 +761,7 @@ class MainWindow(QWidget):
             )
 
         if len(filename) > 0:
-            self.status_bar.showMessage("Status: loading...")
+            self.on_status_update("loading...")
             
             with open(Path(filename), "r") as f:
                 settings_pane_config = json.load(f)
@@ -779,7 +780,7 @@ class MainWindow(QWidget):
                 except Exception:
                     logging.error(traceback.format_exc())
 
-            self.status_bar.showMessage("Status: Ready")
+            self.on_status_update("Ready")
         
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -803,7 +804,7 @@ class MainWindow(QWidget):
         """
         Performs error function fit to experiment data within xlim of interactive plot for all selected sectors
         """
-        self.status_bar.showMessage("Status: Fitting...")
+        self.on_status_update("Fitting...")
 
         checked_sector_checkboxes = cast(list[bool], [sector_checkbox.isChecked() for sector_checkbox in self.sector_checkboxes])
         self.sectors_to_fit = [_sector for _sector, checked in zip(self.sectors, checked_sector_checkboxes) if checked]
@@ -843,7 +844,7 @@ class MainWindow(QWidget):
             self.fit_results_label.setText(fit_results)
         
         finally:
-            self.status_bar.showMessage("Status: Ready")
+            self.on_status_update("Ready")
 
     
         return None

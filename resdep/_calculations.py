@@ -33,8 +33,23 @@ def energy_calc(freq: float, f_rev: float, harmonic: int) -> float: ...
 def energy_calc(freq: Union[float, np.floating], f_rev: float, harmonic: int) -> Union[float, np.floating]:
     """
     Frequency (kHz) -> energy (GeV) conversion
+
+    Parameters
+    ----------
+    freq: float | np.floating
+        Frequency data, kHz
+    f_rev: float
+        Revolution frequency, kHz
+    harmonic: int
+        Harmonic of frequency drive
+
+    Returns
+    -------
+    Energy: float | np.floating
+        Beam energy, GeV
     """
-    return (freq/f_rev - harmonic + 6) * m_e*c**2/(e*a_g*1e9)
+    
+    return (freq/f_rev - harmonic + 6) * m_e*c**2/(e*a_g*1e9) # GeV
 # ------------------------------------------------------------------------------------------------------
 @overload
 def freq_calc(energy: float, f_rev: float, harmonic: int) -> float: ...
@@ -43,12 +58,31 @@ def freq_calc(energy: np.floating, f_rev: float, harmonic: int) -> np.floating: 
 def freq_calc(energy: Union[float, np.floating], f_rev: float, harmonic: int) -> Union[float, np.floating]:
     """
     Energy (GeV) -> frequency (kHz) conversion:
+
+    Parameters
+    ----------
+    energy: float | np.floating
+        Energy data, GeV
+    f_rev: float
+        Revolution frequency, kHz
+    harmonic: int
+        Harmonic of frequency drive
+
+    Returns
+    -------
+    frequency: float | np.floating
+        Beam energy, GeV
     """
     return f_rev * (energy*1e9*e*a_g/(m_e*c**2) + harmonic - 6)
 # ------------------------------------------------------------------------------------------------------
 def tune_calc(energy: float) -> float:
     """
-    Energy (GeV) to tune conversion
+    Energy (GeV) to tune (whole | non-fractional) conversion 
+
+    Parameters
+    ----------
+    energy: float
+        Energy, GeV
     """
     return a_g * e * energy * 1e9 / (m_e * c**2)
 # ------------------------------------------------------------------------------------------------------
@@ -63,7 +97,7 @@ def round_to_1_sigfig(value: Union[float, np.floating]) -> float:
 # ------------------------------------------------------------------------------------------------------
 def round_to_error_sigfig(value: Union[float, np.floating], error: Union[float, np.floating]) -> float:
     """
-    Round value to the same sigfigs as the error
+    Round value to the same significant figures as the error
     """
     if error == 0:
         return float(value)
@@ -71,5 +105,5 @@ def round_to_error_sigfig(value: Union[float, np.floating], error: Union[float, 
 
 
 if __name__ == "__main__":
-    print("_calculations.py contains helper functions for resdep.py and resdepGUI.py and should not be run directly.")
-    print("Instead, use (for example): \"> from _calculations import energy_calc\".")
+    print("_calculations.py contains helper functions for resonant depolarisation experiment.py and resdepGUI.py.")
+    print("Run help(_calculations) after import for more details.")

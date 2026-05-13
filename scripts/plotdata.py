@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Plot resdep data
 """
@@ -13,6 +14,7 @@ Plot resdep data
 from functools import partial
 from typing import Any
 from datetime import datetime
+import time
 import json
 import numpy as np
 import matplotlib.pyplot as plt 
@@ -29,7 +31,10 @@ from scipy import optimize
 
 # resdep modules
 from resdep.epicsBPMs import SR_BPMs, MX3_BPMs, TBPMs
-from resdep._calculations import energy_calc, freq_calc, model
+from resdep._plotting import PlottingClass, StandaloneGraph
+from resdep._fitting import FittingClass
+from resdep.experiment import ResonantDepolarisation, ProcessedData
+from resdep._calculations import energy_calc, freq_calc
 
 # --- consts
 f_rev 		= 1.38799e3 			# kHz
@@ -44,7 +49,7 @@ mu: str 	= u"\u03bc"
 # --- import data
 
 data_path = Path("Z:/usr/data/resdep")
-data_path = data_path / "2026" / "2026-03-30" / "2116h"
+data_path = data_path / "2026" / "2026-02-22" / "1101h"
 print(f"folder={data_path.name}")
 if not data_path.exists():
 	raise FileNotFoundError("Incorrect path")
@@ -60,7 +65,12 @@ freqs: list[float] = []
 with open(os.path.join(data_path, 'freqs.txt'), 'r') as f:
 	for line in f.readlines():
 		freqs.append(float(line)/1e3)	# Hz -> kHz
-freqs_array = np.array(freqs)
+
+
+set_freqs: list[float] = []
+with open(os.path.join(data_path, 'set_freqs.txt'), 'r') as f:
+	for line in f.readlines():
+		set_freqs.append(float(line))	# kHz
 
 # timestamps txt
 timestamps_strings: list[str] = [] 
@@ -96,6 +106,29 @@ if "f_rev" in metadata.keys():
 	f_rev = metadata["f_rev"]
 tune = metadata["fractional tune"]
 harmonic = metadata['harmonic']
+sweep_rate = metadata["sweep rate (Hz/s)"]
+# calculate expected resonance frequency
+res_freq: float = f_rev * (tune + harmonic)
+
+# --- config classes
+resdep = ResonantDepolarisation()
+resdep.freqs = [freq*1e3 for freq in freqs] 
+resdep.set_freqs = set_freqs
+resdep.beam_loss_window_1 = beam_loss_window_1
+resdep.beam_loss_window_2 = beam_loss_window_2
+resdep.sweep_rate = sweep_rate
+resdep.f_rev = f_rev
+resdep.tune = tune
+resdep.harmonic = harmonic
+resdep.res_freq = res_freq
+
+sectors_to_fit = ["1", "4", "8", "11", "12", "13"]
+processed_data = ProcessedData(resdep=resdep, sectors_to_fit=sectors_to_fit)
+processed_data.calculate_ratio_loss(sigma=200, bin=True)
+
+graph = StandaloneGraph()
+plotting = PlottingClass(resdep=resdep, processed_data=processed_data, graph=graph)
+fitting = FittingClass(resdep=resdep, processed_data=processed_data)
 
 # --- BPMs
 sr_bpms = ...
@@ -129,299 +162,297 @@ if bpm_path.exists():
 					break
 
 
-# calculate expected resonance frequency
-res_freq: float = f_rev * (tune + harmonic)
 
 
 # ------------------------------------------------------------------------------------------------------
-def plot_normal_loss() -> None:
+# def plot_normal_loss() -> None:
 
-	beam_losses = []
+# 	beam_losses = []
 
-	# --- plot data
-	fig, axs = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
+# 	# --- plot data
+# 	fig, axs = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
 
-	# plot normalised data:
-	norm_beam_losses = {}
-	for index, key in enumerate(beam_losses):
-		norm_beam_losses[key] = gaussian_filter1d(beam_losses[key]/np.max(beam_losses[key]), 2)
-		if index % 2 == 0:
-			axs[0].plot(freqs, norm_beam_losses[key] - 0.15*index, '-', label=key)
-		else:
-			axs[0].plot(freqs, norm_beam_losses[key] - 0.15*index, '-', color='k', label=key)	
-		axs[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-	axs[0].set_title('All sectors')
-	axs[0].set_xlabel('frequency (kHz)')
+# 	# plot normalised data:
+# 	norm_beam_losses = {}
+# 	for index, key in enumerate(beam_losses):
+# 		norm_beam_losses[key] = gaussian_filter1d(beam_losses[key]/np.max(beam_losses[key]), 2)
+# 		if index % 2 == 0:
+# 			axs[0].plot(freqs, norm_beam_losses[key] - 0.15*index, '-', label=key)
+# 		else:
+# 			axs[0].plot(freqs, norm_beam_losses[key] - 0.15*index, '-', color='k', label=key)	
+# 		axs[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
+# 	axs[0].set_title('All sectors')
+# 	axs[0].set_xlabel('frequency (kHz)')
 
-	second_axis = axs[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-	second_axis.set_xlabel('Energy (GeV)')
+# 	second_axis = axs[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
+# 	second_axis.set_xlabel('Energy (GeV)')
 
-	# plot just sector 11 (normalised)
-	axs[1].plot(freqs, norm_beam_losses['11A'], '-', label='11A')
-	axs[1].plot(freqs, norm_beam_losses['11B'] + 0.15, '-', label='11B')
-	axs[1].legend(loc='lower right')
-	axs[1].set_title('Sector 11')
+# 	# plot just sector 11 (normalised)
+# 	axs[1].plot(freqs, norm_beam_losses['11A'], '-', label='11A')
+# 	axs[1].plot(freqs, norm_beam_losses['11B'] + 0.15, '-', label='11B')
+# 	axs[1].legend(loc='lower right')
+# 	axs[1].set_title('Sector 11')
 
 
 
-	# --- plot data - current normalised
-	fig2, axs2 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
+# 	# --- plot data - current normalised
+# 	fig2, axs2 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
 
-	# --- normalise to current
-	beam_losses_Inorm = {}
-	for key in beam_losses:
-		beam_losses_Inorm[key] = np.array(beam_losses[key])/(np.array(current)**2)
+# 	# --- normalise to current
+# 	beam_losses_Inorm = {}
+# 	for key in beam_losses:
+# 		beam_losses_Inorm[key] = np.array(beam_losses[key])/(np.array(current)**2)
 
-	# plot normalised data:
-	for index, key in enumerate(beam_losses):
-		# Colour straight, make corresponding arc black
-		if index % 2 == 0:
-			axs2[0].plot(freqs, beam_losses_Inorm[key]/np.max(beam_losses_Inorm[key]) - 0.15*index, '-', label=key)
-		else:
-			axs2[0].plot(freqs, beam_losses_Inorm[key]/np.max(beam_losses_Inorm[key]) - 0.15*index, '-', color='k', label=key)	
-		axs2[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-	axs2[0].set_title('All sectors (current normalised)')
+# 	# plot normalised data:
+# 	for index, key in enumerate(beam_losses):
+# 		# Colour straight, make corresponding arc black
+# 		if index % 2 == 0:
+# 			axs2[0].plot(freqs, beam_losses_Inorm[key]/np.max(beam_losses_Inorm[key]) - 0.15*index, '-', label=key)
+# 		else:
+# 			axs2[0].plot(freqs, beam_losses_Inorm[key]/np.max(beam_losses_Inorm[key]) - 0.15*index, '-', color='k', label=key)	
+# 		axs2[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
+# 	axs2[0].set_title('All sectors (current normalised)')
 
-	second_axis2 = axs2[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-	second_axis2.set_xlabel('Energy (GeV)')
+# 	second_axis2 = axs2[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
+# 	second_axis2.set_xlabel('Energy (GeV)')
 
-	# plot just sector 11 (normalised)
-	axs2[1].plot(freqs, beam_losses_Inorm['11A']/np.max(beam_losses_Inorm['11A']), '-', label='11A')
-	axs2[1].plot(freqs, beam_losses_Inorm['11B']/np.max(beam_losses_Inorm['11B']) + 0.15, '-', label='11B')
-	axs2[1].legend(loc='lower right')
-	axs2[1].set_title('Sector 11 (current normalised)')
+# 	# plot just sector 11 (normalised)
+# 	axs2[1].plot(freqs, beam_losses_Inorm['11A']/np.max(beam_losses_Inorm['11A']), '-', label='11A')
+# 	axs2[1].plot(freqs, beam_losses_Inorm['11B']/np.max(beam_losses_Inorm['11B']) + 0.15, '-', label='11B')
+# 	axs2[1].legend(loc='lower right')
+# 	axs2[1].set_title('Sector 11 (current normalised)')
 
-	plt.show()
+# 	plt.show()
 
-	# ----------------------------------- #
-	# ------	ADC counter loss 	----- #
-	# ----------------------------------- #
+# 	# ----------------------------------- #
+# 	# ------	ADC counter loss 	----- #
+# 	# ----------------------------------- #
 	
 
 
-	freqs_array = np.array(freqs)
+# 	freqs_array = np.array(freqs)
 
-	# --- plot data
-	fig3, axs3 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
-
-
-	# plot normalised data:
-	for index, key in enumerate(beam_loss_window_1):
-		# Colour straight, make corresponding arc black
-		if index % 2 == 0:
-			axs3[0].plot(freqs_array, beam_loss_window_1[key]/np.max(beam_loss_window_1[key]) - 0.15*index, '-', label=key)
-		else:
-			axs3[0].plot(freqs_array, beam_loss_window_1[key]/np.max(beam_loss_window_1[key]) - 0.15*index, '-', color='k', label=key)	
-		axs3[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-	axs3[0].set_title('ADC counter loss 1 - All sectors')
-	axs3[0].set_xlabel('frequency (kHz)')
-
-	# Create energy top axis
-	second_axis = axs3[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-	second_axis.set_xlabel('Energy (GeV)')
-
-	# plot just sector 11 (normalised)
-	axs3[1].plot(freqs_array, beam_loss_window_1['11A']/np.max(beam_loss_window_1['11A']), '-', label='11A')
-	axs3[1].plot(freqs_array, beam_loss_window_1['11B']/np.max(beam_loss_window_1['11B']) + 0.15, '-', label='11B')
-	axs3[1].legend(loc='lower right')
-	axs3[1].set_title('Sector 11')
-
-	# plt.savefig(os.path.join(data_path, "ADC_counter_loss_1.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+# 	# --- plot data
+# 	fig3, axs3 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
 
 
-	# --- plot data
-	fig4, axs4 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
+# 	# plot normalised data:
+# 	for index, key in enumerate(beam_loss_window_1):
+# 		# Colour straight, make corresponding arc black
+# 		if index % 2 == 0:
+# 			axs3[0].plot(freqs_array, beam_loss_window_1[key]/np.max(beam_loss_window_1[key]) - 0.15*index, '-', label=key)
+# 		else:
+# 			axs3[0].plot(freqs_array, beam_loss_window_1[key]/np.max(beam_loss_window_1[key]) - 0.15*index, '-', color='k', label=key)	
+# 		axs3[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
+# 	axs3[0].set_title('ADC counter loss 1 - All sectors')
+# 	axs3[0].set_xlabel('frequency (kHz)')
 
-	# plot normalised data:
-	for index, key in enumerate(beam_loss_window_2):
-		# Colour straight, make corresponding arc black
-		if index % 2 == 0:
-			axs4[0].plot(freqs_array, beam_loss_window_2[key]/np.max(beam_loss_window_2[key]) - 0.15*index, '-', label=key)
-		else:
-			axs4[0].plot(freqs_array, beam_loss_window_2[key]/np.max(beam_loss_window_2[key]) - 0.15*index, '-', color='k', label=key)	
-		axs4[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
-	axs4[0].set_title('ADC counter loss 2 - All sectors')
-	axs4[0].set_xlabel('frequency (kHz)')
+# 	# Create energy top axis
+# 	second_axis = axs3[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
+# 	second_axis.set_xlabel('Energy (GeV)')
 
-	# Create energy top axis
-	second_axis = axs4[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
-	second_axis.set_xlabel('Energy (GeV)')
+# 	# plot just sector 11 (normalised)
+# 	axs3[1].plot(freqs_array, beam_loss_window_1['11A']/np.max(beam_loss_window_1['11A']), '-', label='11A')
+# 	axs3[1].plot(freqs_array, beam_loss_window_1['11B']/np.max(beam_loss_window_1['11B']) + 0.15, '-', label='11B')
+# 	axs3[1].legend(loc='lower right')
+# 	axs3[1].set_title('Sector 11')
 
-	# plot just sector 11 (normalised)
-	axs4[1].plot(freqs_array, beam_loss_window_2['11A']/np.max(beam_loss_window_2['11A']), '-', label='11A')
-	axs4[1].plot(freqs_array, beam_loss_window_2['11B']/np.max(beam_loss_window_2['11B']) + 0.15, '-', label='11B')
-	axs4[1].legend(loc='lower right')
-	axs4[1].set_title('Sector 11')
-
-	# plt.savefig(os.path.join(data_path, "adc_counter_loss_2.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
-
-	return None
-# ------------------------------------------------------------------------------------------------------
-def plot_ratio_loss() -> None:
-
-	# ----------------------------------- #
-	# ------		Ratio Loss  	----- #
-	# ----------------------------------- #
-
-	# ! minus 1 from the data and do cumsum
-
-	ratio_loss: dict[str, Any] = {}
-	freqs_array = np.array(freqs)
-	fitted_beam_energy_frequencies: dict[str, float] = {}
-	fitted_beam_energies: dict[str, float] = {}
-	fitted_beam_energy_variances: dict[str, float] = {}
-
-	for key in beam_loss_window_1:
-		ratio_loss[key] = (np.array(beam_loss_window_1[key]) + 1)/(np.array(beam_loss_window_2[key]) + 1)
-
-	start = 0
-	end = len(freqs_array)
-	sigma = 10
-	window_length = 5 # 1101
-	do_fit = False
-	sectors = ["1", "4", "8", "11", "12", "13"]
-	# sectors = ["1", "8", "13"]
-
-	fig, axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
-	deriv_fig, deriv_axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
-	cumsum_fig, cumsum_axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
-
-	for sector in sectors:
-		# filter / bin
-		bend = gaussian_filter1d(ratio_loss[f"{sector}B"][start:end], sigma)
-		# set zero
-		bend += np.min(bend)
-		# normalise
-		bend *= 1/np.max(bend)
-		# differentiate
-		deriv_bend = savgol_filter(x=bend, window_length=window_length, polyorder=1, deriv=1)
-		deriv_bend_peak = np.argmax(deriv_bend)
-		# cumsum
-		bend_at_zero = bend - np.mean(bend[:200])
-		bend_cumsum = np.cumsum(bend_at_zero)
-		# plot
-		axs.plot(freqs_array[start:end], bend + 0.03 * float(sector), label=f"{sector}B")
-		deriv_axs.plot(freqs_array[start:end], deriv_bend + 6e-5 * float(sector), label=f"{sector}B")
-		deriv_axs.axvline(x=freqs_array[deriv_bend_peak], ymin=0, ymax=1, color='red')
-		cumsum_axs.plot(freqs_array[start:end], bend_cumsum, label=f"{sector}B")
-
-		if do_fit:
-			# do fit
-			popt, pcov = optimize.curve_fit(model, freqs_array[start:end], bend, p0=[res_freq, 1, 1, 1], maxfev=8000)
-			y_model = model(freqs_array[start:end], *popt)
-
-			# -- calculate goodness of fit
-			# residual sum of squares
-			ss_res = np.sum((bend - y_model)**2)
-			# total sum of squares
-			ss_tot = np.sum((bend - np.mean(bend))**2)
-			# r-squared
-			r2 = 1 - (ss_res / ss_tot)
-
-			# score = r2_score(bend, y_model)
-			score = 0
-			fitted_beam_energy_frequencies[f"{sector}B"] = popt[0]  
-			fitted_beam_energies[f"{sector}B"] = energy_calc(popt[0], f_rev, harmonic)
-			fitted_beam_energy_variances[f"{sector}B"] = energy_calc(pcov[0], f_rev, harmonic)
-			print(f"f0={popt[0]:0.3f}, E0={energy_calc(popt[0], f_rev, harmonic):0.5f}, score={score:0.2f}, r^2={r2:0.2f}")
-			# plot baseline
-			axs.axhline(y=y_model[0] + 0.03 * float(sector), xmin=0, xmax=1, alpha=0.1, linestyle="--", color="black")
-			# plot fit
-			axs.plot(freqs_array[start:end], y_model + 0.03 * float(sector), linestyle='--', color="red")
-
-	axs.legend(bbox_to_anchor=(0.5, -0.3), loc='lower center', ncol=7)
-	axs.set_xlim(freqs_array[start], freqs_array[-1])
-	axs.set_xlabel("Frequency (kHz)")
-
-	# Create energy top axis
-	second_axis = axs.secondary_xaxis("top", 
-		functions=(
-			partial(energy_calc, f_rev=f_rev, harmonic=harmonic), # type: ignore
-			partial(freq_calc, f_rev=f_rev, harmonic=harmonic)# type: ignore
-			)
-		)
-	second_axis.set_xlabel('Energy (GeV)')
+# 	# plt.savefig(os.path.join(data_path, "ADC_counter_loss_1.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
 
-	# define sig fig calc:
-	def round_to_1_sigfig(x):
-		if x == 0:
-			return 0
-		return np.round(x, -int(np.floor(np.log10(abs(x)))))
+# 	# --- plot data
+# 	fig4, axs4 = plt.subplots(1,2, figsize=(16,8), constrained_layout=True)
 
-	if do_fit:
-		# calculate 2* st.dev
-		f_rdp_mean 				= np.mean(np.array(list(fitted_beam_energy_frequencies.values())))
-		E0_mean 				= np.mean(np.array(list(fitted_beam_energies.values())))
-		E0_stdev 				= 2*np.std(np.array(list(fitted_beam_energies.values())))
-		E0_stdev_sigfig 		= round_to_1_sigfig(E0_stdev)
-		E0_mean_sigfig 			= np.round(E0_mean, -int(np.floor(np.log10(abs(E0_stdev)))))
-		sideband_energy_shift 	= E0_mean - energy_calc(f_rdp_mean - f_rev*v_synch, f_rev, harmonic)
-		expected_sidebands 		= [energy_calc(f_rdp_mean - 11.756, f_rev, harmonic), energy_calc(f_rdp_mean + f_rev*v_synch, f_rev, harmonic)]
+# 	# plot normalised data:
+# 	for index, key in enumerate(beam_loss_window_2):
+# 		# Colour straight, make corresponding arc black
+# 		if index % 2 == 0:
+# 			axs4[0].plot(freqs_array, beam_loss_window_2[key]/np.max(beam_loss_window_2[key]) - 0.15*index, '-', label=key)
+# 		else:
+# 			axs4[0].plot(freqs_array, beam_loss_window_2[key]/np.max(beam_loss_window_2[key]) - 0.15*index, '-', color='k', label=key)	
+# 		axs4[0].legend(bbox_to_anchor=(0.5, -0.2), loc='lower center', ncol=7)
+# 	axs4[0].set_title('ADC counter loss 2 - All sectors')
+# 	axs4[0].set_xlabel('frequency (kHz)')
 
-		print(f"mean E0 = {E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stdev_sigfig*1e6:.0f} keV")
+# 	# Create energy top axis
+# 	second_axis = axs4[0].secondary_xaxis("top", functions=(energy_calc, freq_calc))
+# 	second_axis.set_xlabel('Energy (GeV)')
 
-		print(f"Sidebands expected at " + u"(\u00B1" + f"{sideband_energy_shift*1e3:.2f} MeV): " + f"{expected_sidebands[0]:.4f}, {expected_sidebands[1]:.4f}")
+# 	# plot just sector 11 (normalised)
+# 	axs4[1].plot(freqs_array, beam_loss_window_2['11A']/np.max(beam_loss_window_2['11A']), '-', label='11A')
+# 	axs4[1].plot(freqs_array, beam_loss_window_2['11B']/np.max(beam_loss_window_2['11B']) + 0.15, '-', label='11B')
+# 	axs4[1].legend(loc='lower right')
+# 	axs4[1].set_title('Sector 11')
 
-		# shade region on plot
-		axs.axvspan(xmin=freq_calc(float(E0_mean-E0_stdev), f_rev, harmonic), xmax=freq_calc(float(E0_mean+E0_stdev), f_rev, harmonic), alpha=0.1, color="black")
+# 	# plt.savefig(os.path.join(data_path, "adc_counter_loss_2.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
-	# prevent scientific notation axes
-	axs.ticklabel_format(useOffset=False)
-	second_axis.ticklabel_format(useOffset=False)
+# 	return None
+# # ------------------------------------------------------------------------------------------------------
+# def plot_ratio_loss() -> None:
 
-	# plt.savefig(os.path.join(data_path, "ratio_loss.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
-	plt.savefig(data_path / "ratio_loss_fit.png", dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+# 	# ----------------------------------- #
+# 	# ------		Ratio Loss  	----- #
+# 	# ----------------------------------- #
 
-	# --- deriv plt.show()
+# 	# ! minus 1 from the data and do cumsum
 
-	deriv_axs.legend(bbox_to_anchor=(0.5, -0.3), loc='lower center', ncol=7)
-	deriv_axs.set_xlim(freqs_array[start], freqs_array[-1])
-	deriv_axs.set_xlabel("Frequency (kHz)")
+# 	ratio_loss: dict[str, Any] = {}
+# 	freqs_array = np.array(freqs)
+# 	fitted_beam_energy_frequencies: dict[str, float] = {}
+# 	fitted_beam_energies: dict[str, float] = {}
+# 	fitted_beam_energy_variances: dict[str, float] = {}
 
-	# Create energy top axis
-	second_axis = deriv_axs.secondary_xaxis("top", 
-		functions=(
-			partial(energy_calc, f_rev=f_rev, harmonic=harmonic), # type: ignore
-			partial(freq_calc, f_rev=f_rev, harmonic=harmonic)# type: ignore
-			)
-		)
-	second_axis.set_xlabel('Energy (GeV)')
+# 	for key in beam_loss_window_1:
+# 		ratio_loss[key] = (np.array(beam_loss_window_1[key]) + 1)/(np.array(beam_loss_window_2[key]) + 1)
 
-	# prevent scientific notation axes
-	deriv_axs.ticklabel_format(useOffset=False)
-	second_axis.ticklabel_format(useOffset=False)
+# 	start = 0
+# 	end = len(freqs_array)
+# 	sigma = 10
+# 	window_length = 5 # 1101
+# 	do_fit = False
+# 	sectors = ["1", "4", "8", "11", "12", "13"]
+# 	# sectors = ["1", "8", "13"]
 
-	plt.show()
+# 	fig, axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
+# 	deriv_fig, deriv_axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
+# 	cumsum_fig, cumsum_axs = plt.subplots(1,1, figsize=(7,5), layout="tight")
 
-	return None
-# ------------------------------------------------------------------------------------------------------
-def plot_ODB() -> None:
+# 	for sector in sectors:
+# 		# filter / bin
+# 		bend = gaussian_filter1d(ratio_loss[f"{sector}B"][start:end], sigma)
+# 		# set zero
+# 		bend += np.min(bend)
+# 		# normalise
+# 		bend *= 1/np.max(bend)
+# 		# differentiate
+# 		deriv_bend = savgol_filter(x=bend, window_length=window_length, polyorder=1, deriv=1)
+# 		deriv_bend_peak = np.argmax(deriv_bend)
+# 		# cumsum
+# 		bend_at_zero = bend - np.mean(bend[:200])
+# 		bend_cumsum = np.cumsum(bend_at_zero)
+# 		# plot
+# 		axs.plot(freqs_array[start:end], bend + 0.03 * float(sector), label=f"{sector}B")
+# 		deriv_axs.plot(freqs_array[start:end], deriv_bend + 6e-5 * float(sector), label=f"{sector}B")
+# 		deriv_axs.axvline(x=freqs_array[deriv_bend_peak], ymin=0, ymax=1, color='red')
+# 		cumsum_axs.plot(freqs_array[start:end], bend_cumsum, label=f"{sector}B")
 
-	fig, axs = plt.subplots(2, 2, figsize=(8,6), layout="tight")
+# 		if do_fit:
+# 			# do fit
+# 			popt, pcov = optimize.curve_fit(model, freqs_array[start:end], bend, p0=[res_freq, 1, 1, 1], maxfev=8000)
+# 			y_model = model(freqs_array[start:end], *popt)
 
-	fig.suptitle("ODB size and offset")
+# 			# -- calculate goodness of fit
+# 			# residual sum of squares
+# 			ss_res = np.sum((bend - y_model)**2)
+# 			# total sum of squares
+# 			ss_tot = np.sum((bend - np.mean(bend))**2)
+# 			# r-squared
+# 			r2 = 1 - (ss_res / ss_tot)
 
-	axs[0,0].plot(ODB_data["X_size"])
-	axs[0,1].plot(ODB_data["X_offset"])
-	axs[1,0].plot(ODB_data["Y_size"])
-	axs[1,1].plot(ODB_data["Y_offset"])
+# 			# score = r2_score(bend, y_model)
+# 			score = 0
+# 			fitted_beam_energy_frequencies[f"{sector}B"] = popt[0]  
+# 			fitted_beam_energies[f"{sector}B"] = energy_calc(popt[0], f_rev, harmonic)
+# 			fitted_beam_energy_variances[f"{sector}B"] = energy_calc(pcov[0], f_rev, harmonic)
+# 			print(f"f0={popt[0]:0.3f}, E0={energy_calc(popt[0], f_rev, harmonic):0.5f}, score={score:0.2f}, r^2={r2:0.2f}")
+# 			# plot baseline
+# 			axs.axhline(y=y_model[0] + 0.03 * float(sector), xmin=0, xmax=1, alpha=0.1, linestyle="--", color="black")
+# 			# plot fit
+# 			axs.plot(freqs_array[start:end], y_model + 0.03 * float(sector), linestyle='--', color="red")
 
-	axs[0,0].set_title(r"X beam size")
-	axs[0,1].set_title(r"X beam offset")
-	axs[1,0].set_title(r"Y beam size")
-	axs[1,1].set_title(r"Y beam offset")
+# 	axs.legend(bbox_to_anchor=(0.5, -0.3), loc='lower center', ncol=7)
+# 	axs.set_xlim(freqs_array[start], freqs_array[-1])
+# 	axs.set_xlabel("Frequency (kHz)")
 
-	axs[0,0].set_ylabel(r"X beam size ($\mu$m)")
-	axs[0,1].set_ylabel(r"X beam offset ($\mu$m)")
-	axs[1,0].set_ylabel(r"Y beam size ($\mu$m)")
-	axs[1,1].set_ylabel(r"Y beam offset ($\mu$m)")
+# 	# Create energy top axis
+# 	second_axis = axs.secondary_xaxis("top", 
+# 		functions=(
+# 			partial(energy_calc, f_rev=f_rev, harmonic=harmonic), # type: ignore
+# 			partial(freq_calc, f_rev=f_rev, harmonic=harmonic)# type: ignore
+# 			)
+# 		)
+# 	second_axis.set_xlabel('Energy (GeV)')
 
-	plt.savefig(os.path.join(data_path, "ODB.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
 
-	plt.show()
+# 	# define sig fig calc:
+# 	def round_to_1_sigfig(x):
+# 		if x == 0:
+# 			return 0
+# 		return np.round(x, -int(np.floor(np.log10(abs(x)))))
 
-	return None
+# 	if do_fit:
+# 		# calculate 2* st.dev
+# 		f_rdp_mean 				= np.mean(np.array(list(fitted_beam_energy_frequencies.values())))
+# 		E0_mean 				= np.mean(np.array(list(fitted_beam_energies.values())))
+# 		E0_stdev 				= 2*np.std(np.array(list(fitted_beam_energies.values())))
+# 		E0_stdev_sigfig 		= round_to_1_sigfig(E0_stdev)
+# 		E0_mean_sigfig 			= np.round(E0_mean, -int(np.floor(np.log10(abs(E0_stdev)))))
+# 		sideband_energy_shift 	= E0_mean - energy_calc(f_rdp_mean - f_rev*v_synch, f_rev, harmonic)
+# 		expected_sidebands 		= [energy_calc(f_rdp_mean - 11.756, f_rev, harmonic), energy_calc(f_rdp_mean + f_rev*v_synch, f_rev, harmonic)]
+
+# 		print(f"mean E0 = {E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stdev_sigfig*1e6:.0f} keV")
+
+# 		print(f"Sidebands expected at " + u"(\u00B1" + f"{sideband_energy_shift*1e3:.2f} MeV): " + f"{expected_sidebands[0]:.4f}, {expected_sidebands[1]:.4f}")
+
+# 		# shade region on plot
+# 		axs.axvspan(xmin=freq_calc(float(E0_mean-E0_stdev), f_rev, harmonic), xmax=freq_calc(float(E0_mean+E0_stdev), f_rev, harmonic), alpha=0.1, color="black")
+
+# 	# prevent scientific notation axes
+# 	axs.ticklabel_format(useOffset=False)
+# 	second_axis.ticklabel_format(useOffset=False)
+
+# 	# plt.savefig(os.path.join(data_path, "ratio_loss.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+# 	plt.savefig(data_path / "ratio_loss_fit.png", dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+
+# 	# --- deriv plt.show()
+
+# 	deriv_axs.legend(bbox_to_anchor=(0.5, -0.3), loc='lower center', ncol=7)
+# 	deriv_axs.set_xlim(freqs_array[start], freqs_array[-1])
+# 	deriv_axs.set_xlabel("Frequency (kHz)")
+
+# 	# Create energy top axis
+# 	second_axis = deriv_axs.secondary_xaxis("top", 
+# 		functions=(
+# 			partial(energy_calc, f_rev=f_rev, harmonic=harmonic), # type: ignore
+# 			partial(freq_calc, f_rev=f_rev, harmonic=harmonic)# type: ignore
+# 			)
+# 		)
+# 	second_axis.set_xlabel('Energy (GeV)')
+
+# 	# prevent scientific notation axes
+# 	deriv_axs.ticklabel_format(useOffset=False)
+# 	second_axis.ticklabel_format(useOffset=False)
+
+# 	plt.show()
+
+# 	return None
+# # ------------------------------------------------------------------------------------------------------
+# def plot_ODB() -> None:
+
+# 	fig, axs = plt.subplots(2, 2, figsize=(8,6), layout="tight")
+
+# 	fig.suptitle("ODB size and offset")
+
+# 	axs[0,0].plot(ODB_data["X_size"])
+# 	axs[0,1].plot(ODB_data["X_offset"])
+# 	axs[1,0].plot(ODB_data["Y_size"])
+# 	axs[1,1].plot(ODB_data["Y_offset"])
+
+# 	axs[0,0].set_title(r"X beam size")
+# 	axs[0,1].set_title(r"X beam offset")
+# 	axs[1,0].set_title(r"Y beam size")
+# 	axs[1,1].set_title(r"Y beam offset")
+
+# 	axs[0,0].set_ylabel(r"X beam size ($\mu$m)")
+# 	axs[0,1].set_ylabel(r"X beam offset ($\mu$m)")
+# 	axs[1,0].set_ylabel(r"Y beam size ($\mu$m)")
+# 	axs[1,1].set_ylabel(r"Y beam offset ($\mu$m)")
+
+# 	plt.savefig(os.path.join(data_path, "ODB.png"), dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
+
+# 	plt.show()
+
+# 	return None
 # ------------------------------------------------------------------------------------------------------
 def plot_SR_BPMs_around_kicker() -> None:
 
@@ -847,4 +878,23 @@ def shade_kicker_off(axes, label: bool = True) -> None:
 if __name__ == "__main__":
 	# plot_SR_BPMs_around_kicker()
 	# plot_SR_BPMs_around_MX3_IVU()
-	plot_MX3_BPMs()
+	# plot_MX3_BPMs()
+
+	# plotting.plot_ratio_loss()
+	# plotting.plot_step_loss_detection()
+	# fitting.fit_error_functions()
+	# plotting.plot_fits()
+
+	# plotting.plot_step_loss_detection()
+	plt.ion()
+	plotting.plot_ratio_loss()
+	graph.figure.show()
+	time.sleep(1)
+	graph.axes.clear()
+	fitting.automagic_fit()
+	plotting.plot_ratio_loss()
+	plotting.plot_fits()
+	# plt.pause(1000)
+	input("continue?")
+	# graph.figure.show()
+	# plt.show()

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Resonant depolarisation experiment (class) \\
 Designed to called through one of the GUIs (resdepGUI, simpleGUI) \\
@@ -33,24 +34,54 @@ import epics
 import time, datetime
 from pathlib import Path
 import json
-from matplotlib.backend_bases import FigureCanvasBase
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt 
+from math import ceil
 from scipy.ndimage import gaussian_filter1d
 
 from resdep.epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions
 from resdep.epicsBPMs import SR_BPMs, MX3_BPMs, TBPMs # BPM subclasses
-from resdep._plotting import PlottingClass, Graph
+from resdep._plotting import PlottingClass, StandaloneGraph
+from resdep._fitting import FittingClass
 from resdep._progressBars import printProgressBar
 
 
 class ResonantDepolarisation():
 	"""
-	Resdep class that holds its own objects (constants, calculation, data) \\
-	and member functions that run and plot the data.
+	Resdep class that stores key variables to and functions to run the experiment. \\
+	Is written to (optionally) take in additional Qt callback functionality, but is not required. \\
+	Therefore, it can be run in the terminal, or through `resdepGUI` / `simpleGUI`. 
 
-	Is written to (optionally) take in additional Qt callback functionality, but is not required.
+	## Key attributes
+	
+	:attr:`res_freq`: *float* 
+		Resonant frequency of the spin tune. 
+	:attr:`harmonic`: *int*
+		Harmonic of the resonant frequency.
+	:attr:`bounds`: *float*
+		The energy bounds (plus minus, as a decimal) over which to scan. \\
+		Usually on the order of 0.05%
+	:attr:`set_kicker_amp`: *float* 
+		Kicker amplifier (percentage as decimal).
+		Defaults to 0.5 (50%).
+	:attr:`set_drive_pattern`: 
+		The bunches to be driven. \\
+		Takes form `"start_bunch:end_bunch"`.
+	:attr:`sweep_rate`: *float*
+		The rate at which the kicker frequencies are swept over.
+		Defaults to 5 Hz/s. \\ 
+		**Warning**: values over 10 Hz/s may be too fast to effectively depolarise.
+	:attr:`set_adc_counter_offset_1`: int | :attr:`set_adc_counter_window_1`: *int*
+		One set of the ADC (analog to digital converter) offset / window applied to the beam loss monitors. \\
+		Used to separate the beam into two charge equivalent halves, only one of which is depolarised. \\
+		The ratio of the losses between the polarised and depolarised halves are used to indicate the spin tune.
+	:attr:`set_freqs`: *list[float]*
+		Frequency values during the experiment sweep
+	:attr:`beam_loss_window_1`: *dict[str, list[float]]*
+		Beam loss from the first ADC window. \\
+		Keys of the form ``"{sector}{section}"``, \\ 
+		where section is either A = straight, or B = bend. e.g. `"4A"`
 	"""
 
 	# variables defined here change across all instances of ResonantDepolarisation.
@@ -74,7 +105,6 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	#
 	def __init__(self, *, progress_callback=None, plot_callback=None, status_callback=None, data_path_callback=None, timer_callback=None, ADC_windows_callback=None) -> None:
-		
 		# --- init callbacks for Qt functionality
 		self.progress_callback 		= progress_callback 	or (lambda *args, **kwargs: None)
 		self.plot_callback 			= plot_callback 		or (lambda *args, **kwargs: None)
@@ -112,14 +142,14 @@ class ResonantDepolarisation():
 		self.set_adc_counter_window_1: int = 42
 		self.set_adc_counter_offset_2: int = 42
 		self.set_adc_counter_window_2: int = 44
-		# select counting mode; 0: differential, 1: normal (thresholding)
-		self.set_counting_mode		 : int = 0
+		self.set_counting_mode		 : int = 0 		# 0: differential, 1: normal (thresholding)
 
 		# initialise some data storage early for GUI plot purposes
-		self.freqs						: list[float] = []
-		self.beam_loss_window_1 		: dict[str, list[float]] = {}
-		self.beam_loss_window_2 		: dict[str, list[float]] = {}
-		self.res_freq 					: float = 1225
+		self.freqs						: list[float] 				= []
+		self.set_freqs					: list[float] 				= []
+		self.beam_loss_window_1 		: dict[str, list[float]] 	= {}
+		self.beam_loss_window_2 		: dict[str, list[float]] 	= {}
+		self.res_freq 					: float 					= 1225
 
 		# do calcs
 		self.calculate_range()
@@ -137,40 +167,41 @@ class ResonantDepolarisation():
 		
 		Workflow
 		--------
+		- Initialises the experiment (calculates f_rev, frequency range for sweep, loads PVs, configs save files)
+		- Takes 10s of baseline data (with the kicker turned off)
 		- Initialises kicker (drive) panel with set amplitude and frequency
 		- Slowly steps through the requested energy (frequency) range \\
-		...(typically at 10 Hz/s, physically updates drive frequency in 0.5 Hz steps)
+		  (typically at 5 Hz/s, physically updates drive frequency in 0.5 Hz steps)
 		- Configures the adc_counts_offset and _window to record beam loss on the polarised and \\
-		...depolarised parts of the beam separately
+		  depolarised parts of the beam separately
 		- The ratio of the depolarised/polarised beam losses will then normalise out spurrious depolarisation events, \\
-		...e.g. ID gap changes, magnet instabilities, etc.
-		- Reads the beam loss for every monitor and drive frequency (readback at 20 Hz)
-		- Employs progress bar in std.out for live updates (1 Hz)
-		- Turns off kicker drive and resets BLM gain voltages and attenuations, scrapers \\
-		...saves and plots data on experiment end or KeyboardInterrupt
-
-		To be implemented
-		-----------------
-
+		  e.g. ID gap changes, magnet instabilities, etc.
+		- Reads the beam loss for every monitor (readback at 10 Hz) (see :func:`fast_log_data`)
+		- When finished
+			- Turns off kicker drive and resets BLM decimation / ADC windows.
+			- Saves and plots data on experiment end or KeyboardInterrupt
+		
+		### Also
+		- Listens for injections -> turns off kicker and sleeps for 10 s (through PV callback :func:`onValueChange`)
+		- Listens for abort requests from the optional GUIs
+		- Updates experiment progress to progress bar on GUI or console
 		"""
 
 		try:
 			if self.status_callback:
-				self.status_callback("Status: Setting up PVs...")
+				self.status_callback("Setting up PVs...")
 
 			# --- start-up
+			self.config_data_path_and_logger()
 			self.calcf_revfromMasterRF()
 			self.calculate_range()
 			self.load_PVs()
-			self.config_save_files()
+			self.config_save_objects()
 
 			self.injection_trigger.add_callback(callback=self.onValueChange)
 			self.calculate_adc_counter_windows()
 
-			# --- update decimation
 			self.blm.apply_full_decimation()
-			
-			# --- apply masks
 			self.blm.apply_adc_counter_masks(
 				offset_1=self.set_adc_counter_offset_1, 
 				window_1=self.set_adc_counter_window_1,
@@ -193,21 +224,19 @@ class ResonantDepolarisation():
 			]):
 				time.sleep(0.05)
 				
-
 			last_slow_log_call	: float = time.time()
 
-			print("|--------------------------------------------|")
-			print("|----------- BEGINNING EXPERIMENT -----------|")
-			print("|---------- Resonant Depolarisation ---------|")
-			print("|--------------------------------------------|")
-
+			logging.info("|--------------------------------------------|")
+			logging.info("|----------- BEGINNING EXPERIMENT -----------|")
+			logging.info("|---------- Resonant Depolarisation ---------|")
+			logging.info("|--------------------------------------------|")
 			# ---------------------------------------------------------------------------------
 			# --- Collect baseline data (BPMs)
 			end = time.time() + 10
 			if self.status_callback:
-				self.status_callback("Status: Collecting baseline BPM data (10 s)...")
+				self.status_callback("Collecting baseline BPM data (10 s)...")
 			else:
-				print("Status: Collecting baseline BPM data (10 s)...")
+				logging.info("Status: Collecting baseline BPM data (10 s)...")
 
 			while time.time() <= end:
 				now = time.time()
@@ -218,7 +247,7 @@ class ResonantDepolarisation():
 				# --- abort if signal is sent from GUI
 				if self._abort_requested:
 					if self.status_callback:
-						self.status_callback("Status: Experiment interrupted!")
+						self.status_callback("Experiment interrupted!")
 					# go to finally block
 					raise KeyboardInterrupt
 				
@@ -234,7 +263,7 @@ class ResonantDepolarisation():
 
 			self.step: int = 0
 			if self.status_callback:
-				self.status_callback("Status: Running")
+				self.status_callback("Running")
 			if self.timer_callback:
 				self.timer_callback()
 
@@ -278,7 +307,7 @@ class ResonantDepolarisation():
 					self.kicker_amp.put(0)
 					# update status to GUI
 					if self.status_callback:
-						self.status_callback("Status: Sleeping (injection)")
+						self.status_callback("Sleeping (injection)")
 
 					self.interruptible_sleep(10)
 					
@@ -288,14 +317,14 @@ class ResonantDepolarisation():
 						time.sleep(0.05)
 					# reset GUI status
 					if self.status_callback:
-						self.status_callback("Status: Running")
+						self.status_callback("Running")
 					# reset state
 					self._injecting = False
 
 				# --- abort if signal is sent from GUI
 				if self._abort_requested:
 					if self.status_callback:
-						self.status_callback("Status: Experiment interrupted!")
+						self.status_callback("Experiment interrupted!")
 					break
 
 				# quick sleep so we keep listening for injections
@@ -305,12 +334,12 @@ class ResonantDepolarisation():
 			logging.error(traceback.format_exc())
 		
 		finally:
-			print("|--------------------------------------------|")
-			print("|------------- EXPERIMENT DONE ! ------------|")
-			print("|--------------------------------------------|")
+			logging.info("|--------------------------------------------|")
+			logging.info("|------------- EXPERIMENT DONE ! ------------|")
+			logging.info("|--------------------------------------------|")
 
 			if self.status_callback:
-				self.status_callback("Status: Cleaning up...")
+				self.status_callback("Cleaning up...")
 
 			if self.progress_callback:
 				self.progress_callback(self.sweep_steps)
@@ -318,27 +347,30 @@ class ResonantDepolarisation():
 			self.save_data()
 
 			# turn off kicker
+			logging.info("Turning kicker off...")
 			self.kicker_amp.put(0, use_complete=True)
-			print("Kicker set to off.")
-			time.sleep(0.05)
-			print("Waiting for kicker put_complete...")
 			while not self.kicker_amp.put_complete:
 				time.sleep(0.05)
-			print("Kicker OFF!")
+			logging.info("Kicker OFF!")
 
 			self.injection_trigger.clear_callbacks()
 
 			# restore epicsBLM window settings
-			print("attempting to restore BLM inits...")
+			logging.info("attempting to restore BLM inits...")
 			self.blm.restore_inits(mode="adc_counter_masks")
 			self.blm.restore_inits(mode="decimation")
+
+			if not self.plot_callback:
+				self.plot_data()
 			
-			print('Done everything :)')
+			logging.info('Done everything :)')
 
 		return None
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def calculate_range(self, ) -> None:
-
+		"""
+		Calculates the frequency and energy range over which the experiment sweeps.
+		"""
 		# --- calcs
 		self.intrinsic_res_freq 	: float 		= self.f_rev * (self.tune + 0) + self.freq_shift				# 0th order, kHz
 		self.res_freq		   		: float 		= self.f_rev * (self.tune + self.harmonic) + self.freq_shift	# harmoinc order, kHz
@@ -360,11 +392,14 @@ class ResonantDepolarisation():
 
 		number_of_top_ups = self.sweep_time//137 # every 2'17"
 		self.estimated_sweep_time: str = str(datetime.timedelta(seconds=int(self.sweep_time + 10*number_of_top_ups)))
-		# print('Estimated sweep time {0}'.format(time.strftime('%H:%M"%S', time.gmtime(self.sweep_time))))
+		# logging.info('Estimated sweep time {0}'.format(time.strftime('%H:%M"%S', time.gmtime(self.sweep_time))))
 
 		return None
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def load_PVs(self, ) -> None:
+		"""
+		Loads all EPICS process variables (PVs) required to run the experiment and those important for experiment metadata (e.g. LCW temp)
+		"""
 		# --- BLMs 
 		self.blm = BLMs()
 		self.blm.get_loss_PVs()
@@ -570,14 +605,13 @@ class ResonantDepolarisation():
 
 		return None
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
-	def config_save_files(self, ) -> None:
-
+	def config_data_path_and_logger(self, ) -> None:	
 		# --- init save path (format: Data\YYYY-mm-dd\HHMM+'h'\) e.g. 'Data\2025-09-25\0900h\'
-		start_time 	= datetime.datetime.now()
-		date_str 	= start_time.strftime("%Y-%m-%d")
-		year_str 	= start_time.strftime("%Y")
-		hours_str 	= start_time.strftime("%H%Mh")
-		seconds_str = start_time.strftime("%Ss")
+		self.start_time = datetime.datetime.now()
+		date_str 		= self.start_time.strftime("%Y-%m-%d")
+		year_str 		= self.start_time.strftime("%Y")
+		hours_str 		= self.start_time.strftime("%H%Mh")
+		seconds_str 	= self.start_time.strftime("%Ss")
 		hostname 	= platform.node()
 		try:
 			hostname.index("OPI")
@@ -596,43 +630,47 @@ class ResonantDepolarisation():
 			self.data_path_callback(self.data_path)
 
 		# --- logging to console and file
-		if not self.plot_callback:
-			# Create a logger
-			logger = logging.getLogger('my_logger')
-			logger.setLevel(logging.DEBUG)
-			# Create a formatter to define the log format
-			formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-			# Create a file handler to write logs to a file
-			file_handler = logging.FileHandler(self.data_path / "logfile.log")
-			file_handler.setLevel(logging.DEBUG)
-			file_handler.setFormatter(formatter)
-			# Create a stream handler to print logs to the console
-			console_handler = logging.StreamHandler()
-			console_handler.setLevel(logging.INFO)  # You can set the desired log level for console output
-			console_handler.setFormatter(formatter)
-			# Add the handlers to the logger
-			logger.addHandler(file_handler)
-			logger.addHandler(console_handler)
+		logger_format = "%(asctime)s - %(levelname)s - %(message)s"
+		file_logger = logging.getLogger("")
+		logging.basicConfig(level=logging.DEBUG,
+							format=logger_format,
+							filename=self.data_path / "logfile.log",
+							filemode='w')
+		# Until here logs only to file: 'logfile'
+		# define a new Handler to log to console as well
+		console_logger = logging.StreamHandler()
+		# optional, set the logging level
+		console_logger.setLevel(logging.INFO)
+		# set a format which is the same for console use
+		formatter = logging.Formatter(logger_format)
+		# tell the handler to use this format
+		console_logger.setFormatter(formatter)
+		# add the handler to the root logger
+		file_logger.addHandler(console_logger)
 
+		return None
+	# ----------------------------------------------------------------------------------------------------------------------------------------------------
+	def config_save_objects(self, ) -> None:
+		"""
+		Initialises save directory (uniquely timestamped) and python objects
+		"""
 		# --- init save vectors
-		self.freqs						: list[float] = []
-		self.set_freqs					: list[float] = []
-		self.current					: list[Union[float, None]] = []
-		self.timestamps_datetime		: list[datetime.datetime] = []
-		self.timestamps_str				: list[str] = []
-		self.slow_timestamps_datetime	: list[datetime.datetime] = []
-		self.slow_timestamps_str		: list[str] = []
-		self.injections					: list[datetime.datetime] = []
-		self.injections_str				: list[str] = []
-		self.beam_loss_window_1 		: dict[str, list[float]] = {}
-		self.beam_loss_window_2 		: dict[str, list[float]] = {}
+		self.current					: list[Union[float, None]] 	= []
+		self.timestamps_datetime		: list[datetime.datetime] 	= []
+		self.timestamps_str				: list[str] 				= []
+		self.slow_timestamps_datetime	: list[datetime.datetime] 	= []
+		self.slow_timestamps_str		: list[str] 				= []
+		self.injections					: list[datetime.datetime] 	= []
+		self.injections_str				: list[str] 				= []
+		self.beam_loss_window_1 		: dict[str, list[float]] 	= {}
+		self.beam_loss_window_2 		: dict[str, list[float]] 	= {}
 		for key in self.blm.loss:
 			self.beam_loss_window_1[key] = []
 			self.beam_loss_window_2[key] = []
-		self.ODB_data : dict[str, list[float]] = {}
+		self.ODB_data: dict[str, list[float]] = {}
 		for key in self.ODB_PVs:
 			self.ODB_data[key] = []
-		self.projected_end_time: datetime.datetime = start_time + datetime.timedelta(seconds=self.sweep_time)
+		self.projected_end_time: datetime.datetime = self.start_time + datetime.timedelta(seconds=self.sweep_time)
 		self.metadata: dict[str, Any] = {
 			"direction"				: self.direction, 
 			"duration"				: time.strftime('%H:%M:%S', time.gmtime(self.sweep_time)), 
@@ -649,7 +687,7 @@ class ResonantDepolarisation():
 			"sweep step size (Hz)"	: self.sweep_step_size, 
 			"sweep span (kHz)"		: self.set_sweep_span, 
 			"sweep period (us)"		: self.set_sweep_period, 
-			"start time"			: start_time.strftime("%Y-%m-%d %H:%M:%S"),
+			"start time"			: self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
 			"projected end time"	: self.projected_end_time.strftime("%Y-%m-%d %H:%M:%S")
 		}
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -722,9 +760,9 @@ class ResonantDepolarisation():
 		"""
 		Calculate a more accurate (real-time) f_rev based off current Master RF  
 		
-		Returns
-		-------
-		self.f_rev: float
+		## Updates attributes
+		
+		:attr:`f_rev`: *float*
 			revolution frequency
 		"""
 		# Grab masterRF from EPICS
@@ -761,15 +799,15 @@ class ResonantDepolarisation():
 
 		Attributes
 		----------
-		[set_adc_counter_offset_1, ...] <- calculated_adc_counter_windows : list[int]
+		[:attr:`set_adc_counter_offset_1`, ...] <- calculated_adc_counter_windows : list[int]
 			list containing counters 1 & 2 window and offset settings for the given sector \\
 			Values are a list of `[offset_1, window_1, offset_2, window_2]`
 
-		set_drive_pattern <- depolarised_bunches : str
+		:attr:`set_drive_pattern` <- depolarised_bunches : str
 			list containing the start:stop range of bunches to be depolarised using the BbB \\
 			This is basically a conversion from the ADC cycles (window length and pos) to bunch number
 		"""
-		print("Status: Time aligning BLM ADC windows and BbB system...")
+		logging.info("Status: Time aligning BLM ADC windows and BbB system...")
 
 		SUM_DEC 			: int 	= 86
 		SUMDEC_PERIODS 		: int 	= 50
@@ -792,11 +830,11 @@ class ResonantDepolarisation():
 		if current_number_of_sumdec_periods < 20:
 			self.blm.sumdec_periods[f"{sector}"].put(SUMDEC_PERIODS)
 			if self.status_callback:
-				self.status_callback("Status: Waiting for injection to update integrated buffer...")
+				self.status_callback("Waiting for injection to update integrated buffer...")
 			while not self._injecting:
 				self.interruptible_sleep(1)
 			if self.status_callback:
-				self.status_callback("Status: Time aligning BLM ADC windows and BbB system...")
+				self.status_callback("Time aligning BLM ADC windows and BbB system...")
 
 
 		replicated_fill_pattern = self.blm.integrated_buffer_loss[f"{sector}B"].get() 
@@ -834,8 +872,8 @@ class ResonantDepolarisation():
 			warnings.warn("Error finding the empty buckets in the fill pattern")
 			return None
 
-		print(f"BbB SRAM middle empty bucket={SRAM_middle_empty_bucket}")
-		print(f"BLM middle empty bucket={blm_middle_empty_bucket}")
+		logging.info(f"BbB SRAM middle empty bucket={SRAM_middle_empty_bucket}")
+		logging.info(f"BLM middle empty bucket={blm_middle_empty_bucket}")
 		# Shift the calculated depolarised bunches by the time offset between the BLM and BbB system (given by the difference in the min bucket)
 		bucket_offset_1 = int(bucket_offset_1 + SRAM_middle_empty_bucket - blm_middle_empty_bucket)
 		bucket_offset_2 = int(bucket_offset_2 + SRAM_middle_empty_bucket - blm_middle_empty_bucket)
@@ -862,10 +900,10 @@ class ResonantDepolarisation():
 		if self.ADC_windows_callback:
 			self.ADC_windows_callback(calculated_adc_counter_windows, depolarised_bunches)
 
-		print("Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]")
-		print(calculated_adc_counter_windows)
-		print("Corresponding depolarised bunches for BbB:")
-		print(depolarised_bunches)
+		logging.info("Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]")
+		logging.info(calculated_adc_counter_windows)
+		logging.info("Corresponding depolarised bunches for BbB:")
+		logging.info(depolarised_bunches)
 		
 		return None
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -912,7 +950,7 @@ class ResonantDepolarisation():
 		"""
 
 		try:
-			print("Saving data...")
+			logging.info("Saving data...")
 
 			# metadata
 			del self.metadata['projected end time']
@@ -988,7 +1026,7 @@ class ResonantDepolarisation():
 		except Exception:
 			logging.error(traceback.format_exc())
 
-		print("\n Data saved!")
+		logging.info("\n Data saved!")
 
 		return None
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------	
@@ -1000,17 +1038,24 @@ class ResonantDepolarisation():
 		"""
 
 		try:
-			print("Attempting to plot ratio data...")
+			logging.info("Attempting to plot ratio data...")
 		
 			sectors_to_fit: list[str] = ["1", "4", "8", "11", "12", "13"]
 			processed_data = ProcessedData(resdep=self, sectors_to_fit=sectors_to_fit)
-			processed_data.calculate_ratio_loss(sigma=5)
+			processed_data.calculate_ratio_loss(sigma=200, bin=True)
 			
-			graph = Graph()
+			graph = StandaloneGraph()
 			plotting = PlottingClass(resdep=self, processed_data=processed_data, graph=graph)
+			fitting = FittingClass(resdep=self, processed_data=processed_data)
+
+			E0_mean, E0_mean_sigfig, fitted_beam_energy_string, error = fitting.automagic_fit()
+			logging.info(fitted_beam_energy_string)
 			plotting.plot_ratio_loss()
+			plotting.plot_fits()
 			plt.savefig(self.data_path / "ratio_loss.png", dpi=300, bbox_inches='tight', facecolor='white', transparent=False)
-			plt.show()
+			plt.ion()
+			graph.figure.show()
+			input("Plot displayed. Record values. Then continue?")
 
 		except Exception:
 			logging.error(traceback.format_exc())
@@ -1074,6 +1119,21 @@ class ResonantDepolarisation():
 class ProcessedData():
 	"""
 	Class for storing processed/analysed/formatted data generated by resdep and associated _fitting and _plotting helper classes
+
+	## Key attributes
+
+	:attr:`freqs_array`: *npt.NDArray[np.floating]*
+		numpy array of the set frequencies during the experiment sweep \\
+		often x-axis in plots and fitting.]
+	:attr:`ratio_loss`: *dict[str, npt.NDArray[np.floating]]*
+		Ratio of the beam loss between the two ADC windows on the beam loss monitors. \\
+		keys of the form `"{sector}{section}"`, e.g. `"4A"`
+
+	## member functions
+
+	:meth:`calculate_ratio_loss`
+		Calculates the ratio of the beam loss between the two ADC windows on the beam loss monitors
+
 	"""
 	resdep 			: "ResonantDepolarisation"
 	sectors_to_fit	: list[str]
@@ -1088,6 +1148,7 @@ class ProcessedData():
 	fitted_beam_energies          : dict[str, float]                   = field(default_factory=dict)
 	fitted_beam_energy_stddevs    : dict[str, float]                   = field(default_factory=dict)
 	fit_results                   : str                                = field(default="")
+	_poor_fit                  	  : dict[str, bool]                    = field(default_factory=dict)
 	# stats
 	E0_mean         : Union[float, None] = field(default=None)
 	E0_stddev       : Union[float, None] = field(default=None)
@@ -1095,27 +1156,59 @@ class ProcessedData():
 	E0_stddev_sigfig: Union[float, None] = field(default=None)
 
 	# ------------------------------------------------------------------------------------------------------
-	def calculate_ratio_loss(self, sigma: int) -> None:
+	def calculate_ratio_loss(self, sigma: int, bin: bool = False) -> None:
+		"""
+		Calculates the ratio of the beam loss between the two ADC windows on the beam loss monitors
 
-		self.freqs_array = np.array(self.resdep.freqs)/1e3 # kHz
+		## Updates attributes:
+
+		:attr:`freqs_array`: *npt.NDArray[np.floating]*
+			numpy array of the set frequencies during the experiment sweep \\
+			often x-axis in plots and fitting.
+		:attr:`ratio_loss`: *dict[str, npt.NDArray[np.floating]]*
+			Ratio of the beam loss between the two ADC windows on the beam loss monitors. \\
+			keys of the form `"{sector}{section}"`, e.g. `"4A"`
+
+		"""
+		# ! Do this once automagic fit is figured out
+		# if sigma is None:
+		# 	self.resdep.
+
+		self.freqs_array = np.array(self.resdep.set_freqs) # kHz
 
 		for sector in self.sectors_to_fit:
+			key = f"{sector}B"
 			# add offset so no ratio is divide by zero 
-			self.resdep.beam_loss_window_1[f"{sector}B"] = [value + 1 for value in self.resdep.beam_loss_window_1[f"{sector}B"]]
-			self.resdep.beam_loss_window_2[f"{sector}B"] = [value + 1 for value in self.resdep.beam_loss_window_2[f"{sector}B"]]
-			self.ratio_loss[f"{sector}B"] = np.array(self.resdep.beam_loss_window_1[f"{sector}B"])/np.array(self.resdep.beam_loss_window_2[f"{sector}B"])
+			self.resdep.beam_loss_window_1[key] = [value + 1 for value in self.resdep.beam_loss_window_1[key]]
+			self.resdep.beam_loss_window_2[key] = [value + 1 for value in self.resdep.beam_loss_window_2[key]]
+			self.ratio_loss[key] = np.array(self.resdep.beam_loss_window_1[key])/np.array(self.resdep.beam_loss_window_2[key])
 
 		for sector in self.sectors_to_fit:
+			key = f"{sector}B"
 			# filter / bin
-			self.ratio_loss[f"{sector}B"] = gaussian_filter1d(self.ratio_loss[f"{sector}B"], sigma)
+			if bin:
+				if sigma % 2 == 0: # is even
+					sigma += 1
+				padding = ceil(sigma/2)
+				number_of_bins = len(self.ratio_loss[key]) - padding
+				binned_ratio_loss = self.ratio_loss[key]
+				for step in range(number_of_bins):
+					bin_centre = sigma//2 + step
+					start = step
+					end = start + sigma
+					binned_ratio_loss[bin_centre] = np.mean(self.ratio_loss[key][start:end])
+				# fill in padding
+				binned_ratio_loss[:padding] = binned_ratio_loss[sigma//2]
+				binned_ratio_loss[-padding:] = binned_ratio_loss[-sigma//2-1]
+			else:
+				self.ratio_loss[key] = gaussian_filter1d(self.ratio_loss[key], sigma)
 			# set zero
-			self.ratio_loss[f"{sector}B"] += np.min(self.ratio_loss[f"{sector}B"])
+			self.ratio_loss[key] += np.min(self.ratio_loss[key])
 			# normalise
-			self.ratio_loss[f"{sector}B"] *= 1/np.max(self.ratio_loss[f"{sector}B"])
+			self.ratio_loss[key] *= 1/np.max(self.ratio_loss[key])
 
 		return None
-
-
+	
 
 if __name__ == "__main__":
 	print("resdep.py contains a class file ResonantDepolarisation which ideally should be instanced in a top-level script and not directly run.")

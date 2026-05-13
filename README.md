@@ -15,25 +15,25 @@ Beam energy diagnostic tool using resonant depolarisation at the Australian Sync
 1. Clone this repo \
 `git clone https://bitbucket.synchrotron.org.au/scm/~watsonl/resdep.git`
 2. Navigate to the repo root durectory
-3. Install with `pip` or `uv`: \
+3. Install with **pip** or **uv**: \
 `pip install .` \
 *or* \
 `uv pip install -e .`
 
 For installation on OPIs:
-1. Clone the latest **tag**, which contains the latest source distribution (`.tar.gz` file) and corresponding wheel (`.whl` file) in `./dist`.
+1. Clone the latest **tag**, which contains the latest source distribution (*.tar.gz* file) and corresponding wheel (*.whl* file) in `./dist`.
 2. Either:  
 a. **execute** `install_resdep.sh`, *or* \
 b. Inside the folder, **run** \
 `pip install $WHEEL_FILE_NAME.whl --find-links ./ --no-index --no-deps` \
-where you replace `$WHEEL_FILE_NAME` with the name of the `.whl` file.
+where you replace `$WHEEL_FILE_NAME` with the name of the *.whl* file.
 
 ## Usage
 
 - `simpleGUI` for general / routine measurements (contains lots of checks to not disturb normal operator and use beam operations)  
 - `resdepGUI` for machine studies / overrides 
 
-**run** in `python`: \
+run in **python**: \
 `from resdep import resdepGUI`\
 `resdepGUI.spawn()` \
 <small>the same syntax is uesd for `simpleGUI`.</small> 

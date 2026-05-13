@@ -23,7 +23,45 @@ class BPMs(ABC):
     """
     EPICS BPM abstract base class that can store families of BPMs
 
-    Current scope is only for storage ring and MX3 BPMs.
+    Current scope is only for storage ring and MX3 BPMs, and TBPMs.
+
+    ## Attributes
+
+    :attr:`x_position_PVs`: *dict[str, Any]*
+        Dictionary of PVs accessing the x-position readback. See your subclass for key format. \\
+        Equivalent dictionaries for :attr:`y_position_PVs` and :attr:`intensity_PVs`
+    :attr:`x_position`: *dict[str, list[float]]*
+        Dictionary of x-position readback values for storage (to append from PV.get()). See your subclass for key format. \\
+        Equivalent dictionaries for :attr:`y_position` and :attr:`intensity`
+    :attr:`position_unit`: *str*
+        Units of the position values. Typically nm or microns.
+    :attr:`position_unit_scale`: *float*
+        Scientific units representing the scale, e.g. nm = 1e-9.
+    :attr:`bpm_separations`: *dict[str, float]* | *None*
+        Separation between adjacent BPMs in m. Keys follow `bpm1|bpm2` in reference to your subclass's keys.
+
+    ## Abstract methods
+    
+    :meth:`connect`
+        Connect to EPICS PVs. Must be overwritten and configured in your subclass. 
+
+    ## Standard Methods
+
+    :meth:`calculate_angles`
+        Calculates the angle of the beam (yaw and pitch) between adjacent BPMs. \\
+        Requires definition of :attr:`position_unit`, :attr:`position_unit_scale`: and :attr:`bpm_separations`.
+    
+    ## Member functions
+    
+    :meth:`record_data`
+        Appends readback of PV to storage dictionary. \\
+        e.g. :attr:`x_position` <-- :attr:`x_position_PVs`
+    
+    :meth:`save_data`
+        Saves all storage dictionaries to passed `path` arg as .json. 
+        
+    :meth:`load_from_finished_experiment`
+        Loads saved .json files at passed arg `path`. Populates storage dictionaries in BPM instance.
     """
     def __init__(self, ) -> None:
 
@@ -39,7 +77,7 @@ class BPMs(ABC):
 
         # --- position units for each EPICS readback
         # (different bpms have different EPICS engineering units)
-        self.position_unit: str         = "Unspecified"
+        self.position_unit      : str   = "Unspecified"
         self.position_unit_scale: float = 1
 
         # drift space between bpms
@@ -115,7 +153,7 @@ class BPMs(ABC):
             keys: `bpm1|bpm2`. See your invoked instance for `bpm` naming scheme.
         """
 
-        print(f"Calculating pitch and yaw. Input units: {self.position_unit} ({self.position_unit_scale})")
+        logging.info(f"Calculating pitch and yaw. Input units: {self.position_unit} ({self.position_unit_scale})")
 
         # generate position dict keys
         bpms = list(self.x_position.keys())
@@ -196,6 +234,11 @@ class BPMs(ABC):
         """
         Loads attributes from saved .json files in a finished experiment data folder. \\
         Each path should be to the specific BPM, i.e. `path=".../1713h/BPMs/MX3/"`
+
+        Parameters
+        ----------
+        path: Path
+            Path to save folder
         """
 
         if not path.is_dir():
@@ -218,7 +261,7 @@ class SR_BPMs(BPMs):
     """
     Collection of storange ring BPMs \\
     Keys of PV dicts follow syntax `{sector}{bpm_number}` \\
-    Subclass of BPMs
+    Subclass of :class:`BPMs`
 
     Position units (EPICS): *nanometer*
     """
@@ -234,6 +277,10 @@ class SR_BPMs(BPMs):
     # -----------------------------------------------------------------------------------------------------------------------
     def generate_bpm_separations(self,) -> None:
         """
+        Generate a dictionary of the of separations between each BPM in the storage ring. \\
+        Dict keys: `{bpm}|{next_bpm}` \\
+        Based on the following information:
+
         BPM locations:
         1:  2.304 m (after straight)
         2:  3.884 m (after quad 1)
@@ -247,6 +294,9 @@ class SR_BPMs(BPMs):
         Straights [1,...,5] : 4.422 m
         Straights [6,7]     : 2.266 m 
         Straights [8,...,14]: 4.422 m
+
+        ## Key attributes:
+        :attr:`bpm_separations`
         """
         # --- generate bpm separations
         # NOTE: this doesn't quite add up to 216 m. About 3 m out, need to check where the discrepancy is
@@ -286,7 +336,7 @@ class SR_BPMs(BPMs):
     @BPMs._decorator_connect_state
     def connect(self, ) -> None:
         """
-        Load `x_position`, `y_position` and `intensity` PVs. Also initates storage attributes (dicts) \\
+        Load :attr:`x_position`, :attr:`y_position` and :attr:`intensity` PVs. Also initates storage attributes (dicts) \\
         Key format: `sector:bpm`, *e.g.* `"11:4"`
         """
 
@@ -331,7 +381,7 @@ class MX3_BPMs(BPMs):
     @BPMs._decorator_connect_state
     def connect(self, ) -> None:
         """
-        Load `x_position`, `y_position`, and `intensity` PVs. Also initates storage attributes (dicts) \\
+        Load :attr:`x_position`, :attr:`y_position`, and :attr:`intensity` PVs. Also initates storage attributes (dicts) \\
         Key format: `BPM number`, e.g. `"4"` 
         
         `|-------------------- Hutch C -------------------------|-- Hutch B --|-- Hutch A --|-- SR ---` \\
@@ -368,3 +418,9 @@ class TBPMs(BPMs):
             self.intensity_PVs[f"{bpm}"]  = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:TEMPERATURE_SUM_MONITOR", connect=True)
 
         return None
+
+if __name__ == "__main__":
+    print("epicsBPMs contains an abstract class file 'BPMs' that is subclassed by a specific BPM group.")
+    print("Examples include storage ring BPMs (SR_BPMs) and MX3 front end BPMs (MX3_BPMs).")
+    print("Used to connect to PVs and record position data. Can also calculate angles (yaw/pitch) from collected data.")
+    print("Run help(BPMs) or help(MX3_BPMs) after import for more details.")
