@@ -11,7 +11,8 @@ Classes for beam loss monitors (BLMs)
 """
 
 from typing import Any, Union, Literal
-import logging, traceback
+import logging
+import traceback
 import datetime
 import json
 import warnings
@@ -103,6 +104,35 @@ class BLMs:
 
         # --- wait time between PV calls / assignments to not flood system
         self.__wait_time = 0.1
+
+        self.check_for_OOS()
+    # ----------------------------------------------------------------------------------------------------------
+    def check_for_OOS(self, ) -> None:
+        """Checks which BLMs (which sectors) are out-of-service (OOS); ignores those PVs (no connect, get, put).
+
+        Attributes
+        -------
+        sectors: list[str]
+            sectors in service 
+        """
+
+        self.sectors: list[int] = []
+        self.sectors_OOS: list[int] = []
+
+        for sector in range(1,14+1,1):
+            # status list: 0: Unknown, 1: Ok, 2: No reply, 3: Invalid
+            box_status_monitor_PV = epics.pv.get_pv(f"SR{sector:02d}IOC91:BOX_STATUS_MONITOR", connect=True)
+            box_status =  box_status_monitor_PV.get()
+            time.sleep(self.__wait_time)
+            if box_status == 1: # <-- Ok
+                self.sectors.append(sector)
+            else:
+                self.sectors_OOS.append(sector)
+                logging.warning(f"Sector {sector} BLM OUT-OF-SERVICE! Ignoring associated PVs.")
+
+        logging.debug(f"In service sectors: {self.sectors}")
+
+        return None
     # ----------------------------------------------------------------------------------------------------------
     def get_loss_PVs(self, ) -> None:
         """
@@ -127,7 +157,7 @@ class BLMs:
         logging.info("Grabbing loss PVs...")
 
         # grab PVs in loop
-        for sector in range(1,14+1,1):
+        for sector in self.sectors:
             for section in ['A', 'B']:
                 self.loss[f"{sector}{section}"]                     = epics.pv.get_pv(f"SR{sector:02d}BLM01:SIGNALS_SA_{section}_MONITOR", connect=True)
                 self.adc_counter_loss_1[f"{sector}{section}"]       = epics.pv.get_pv(f"SR{sector:02d}BLM01:signals:counter.{section}1", connect=True)
@@ -165,7 +195,7 @@ class BLMs:
         logging.info("Grabbing adc_counter_mask_PVs...")
 
         # grab PVs in loop
-        for sector in range(1,14+1,1):
+        for sector in self.sectors:
             self.adc_counter_offset_1[f"{sector}"] = epics.pv.get_pv(f"SR{sector:02d}BLM01:adcmask_c1:offset_sp", connect=True)
             self.adc_counter_window_1[f"{sector}"] = epics.pv.get_pv(f"SR{sector:02d}BLM01:adcmask_c1:window_sp", connect=True)
             self.adc_counter_offset_2[f"{sector}"] = epics.pv.get_pv(f"SR{sector:02d}BLM01:adcmask_c2:offset_sp", connect=True)
@@ -272,7 +302,7 @@ class BLMs:
         """
 
         # grab PVs in loop
-        for sector in range(1,14+1,1):
+        for sector in self.sectors:
             self.sumdec_adc_mask_offset[f"{sector}"] = epics.pv.get_pv(f"SR{sector:02d}BLM01:adcmask:offset_sp", connect=True)
             self.sumdec_adc_mask_window[f"{sector}"] = epics.pv.get_pv(f"SR{sector:02d}BLM01:adcmask:window_sp", connect=True)
         
@@ -325,7 +355,7 @@ class BLMs:
         
         # grab PVs
         logging.info("Grabbing decimation PVs...")
-        for sector in range(1,14+1,1):
+        for sector in self.sectors:
             # Sets the decimation factor from ADC to SUM (Setting range [16, 4096])
             # sanity check to make sure we set ADC offset through full range
             self.sum_decimation[f"{sector}"] = epics.pv.get_pv(f"SR{sector:02d}BLM01:decimation:sum_sp", connect=True)
@@ -421,7 +451,7 @@ class BLMs:
             "14":     4
         }
 
-        for sector in range(1, 14+1, 1):
+        for sector in self.sectors:
             self.t2_trigger_delays[f"{sector}"] = epics.pv.get_pv(f"SR{sector:02d}BLM01:triggers:t2:delay_sp", connect=True)
 
         for key, PV in self.t2_trigger_delays.items():
@@ -442,7 +472,7 @@ class BLMs:
         """
 
         # grab PVs in loop
-        for sector in range(1,14+1,1):
+        for sector in self.sectors:
             for section in ['A', 'B']:
                 self.Vgc[f"{sector}{section}"] 		    = epics.pv.get_pv(f"SR{sector:02d}BLM01:bld:vgc:{section}_sp", connect=True)
                 self.att[f"{sector}{section}"] 		    = epics.pv.get_pv(f"SR{sector:02d}BLM01:att:{section}_sp", connect=True)

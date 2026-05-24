@@ -131,7 +131,7 @@ class MainWindow(QWidget):
         self.resdepQt.finished.connect(self.on_finish)
 
         # helper classes
-        sectors_to_fit = ["1", "4", "8", "11", "12", "13"]
+        sectors_to_fit = ["1", "4", "8", "11", "12"] # ! <----- FIX HERE, need to remove OOS sectors, so probably need to instance BLMs on init which im not happy about.
         self.processed_data = ProcessedData(resdep=self.resdep, sectors_to_fit=sectors_to_fit)
         self.fitting        = FittingClass(resdep=self.resdep, processed_data=self.processed_data)
 
@@ -204,6 +204,7 @@ class MainWindow(QWidget):
         
         # --- status bar
         self.progress_bar = QProgressBar(self)
+        self.progress_bar.setMaximum(self.resdep.sweep_steps)
 
         # status bar -------------------------------- #
         self.status_bar = QStatusBar()
@@ -424,6 +425,10 @@ class MainWindow(QWidget):
         self.enable_abort_button()
         # update status bar
         self.on_status_update("Starting up...")
+
+        # update progress bar
+        self.resdep.calculate_range()
+        self.progress_bar.setMaximum(self.resdep.sweep_steps)
             
         # call resdep
         self._running_experiment = True
@@ -497,6 +502,7 @@ class MainWindow(QWidget):
         self.progress_bar.setValue(100)
         self.progress_bar.setMaximum(100)
 
+        # ! <---- dont run if abort requested
         E0_mean, E0_mean_sigfig, fitted_beam_energy_string, error = self.fitting.automagic_fit()
         # update GUI
         if error:

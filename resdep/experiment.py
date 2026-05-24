@@ -242,7 +242,7 @@ class ResonantDepolarisation():
 				now = time.time()
 				self.fast_log_data()
 				if (now - last_slow_log_call) >= 1/self.slow_log_frequency:
-					self.slow_log_data()
+					# self.slow_log_data() # ! <------------- FIX
 					last_slow_log_call = time.time()
 				# --- abort if signal is sent from GUI
 				if self._abort_requested:
@@ -289,7 +289,7 @@ class ResonantDepolarisation():
 
 				# --- Update progress bar, plot and ODB at 1 Hz
 				if (now - last_slow_log_call) >= 1/self.slow_log_frequency:
-					self.slow_log_data()
+					# self.slow_log_data() # ! <----------- FIX
 					# update progress to QtGUI 
 					if self.progress_callback:
 						self.progress_callback(self.step)
@@ -435,11 +435,13 @@ class ResonantDepolarisation():
 		self.injection_trigger = epics.pv.get_pv("TS01EVG01:INJECTION_MODE_STATUS", connect=True)
 
 		# --- ODB beam size and position
-		self.ODB_PVs: dict[str, Any] = {}
-		self.ODB_PVs["X_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:X_SIZE_MONITOR", connect=True)
-		self.ODB_PVs["X_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:X_OFFSET_MONITOR", connect=True)
-		self.ODB_PVs["Y_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:Y_SIZE_MONITOR", connect=True)
-		self.ODB_PVs["Y_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)\
+		# ! <------------- FIX HERE
+		# ! Need general safeguard for when PVs dont connect, we should try to call get later...
+		# self.ODB_PVs: dict[str, Any] = {}
+		# self.ODB_PVs["X_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:X_SIZE_MONITOR", connect=True)
+		# self.ODB_PVs["X_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:X_OFFSET_MONITOR", connect=True)
+		# self.ODB_PVs["Y_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:Y_SIZE_MONITOR", connect=True)
+		# self.ODB_PVs["Y_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)
 
 		# --- SR/LCW/RF temperatures
 		# initialise PV dicts
@@ -667,9 +669,9 @@ class ResonantDepolarisation():
 		for key in self.blm.loss:
 			self.beam_loss_window_1[key] = []
 			self.beam_loss_window_2[key] = []
-		self.ODB_data: dict[str, list[float]] = {}
-		for key in self.ODB_PVs:
-			self.ODB_data[key] = []
+		# self.ODB_data: dict[str, list[float]] = {} # ! <------------ FIX HERE
+		# for key in self.ODB_PVs:
+		# 	self.ODB_data[key] = []
 		self.projected_end_time: datetime.datetime = self.start_time + datetime.timedelta(seconds=self.sweep_time)
 		self.metadata: dict[str, Any] = {
 			"direction"				: self.direction, 
@@ -743,16 +745,16 @@ class ResonantDepolarisation():
 		- Emittance monitors
 		- timestamps
 		"""
-		try:
-			slow_timestamp = datetime.datetime.now()
-			slow_timestamp_str = slow_timestamp.strftime("%Y-%m-%d %H:%M:%S")
-			self.slow_timestamps_datetime.append(slow_timestamp)
-			self.slow_timestamps_str.append(slow_timestamp_str)
-			for key in self.ODB_data:
-				self.ODB_data[key].append(self.ODB_PVs[key].get()) # um
+		# try: # ! <-------------- FIX
+		# 	slow_timestamp = datetime.datetime.now()
+		# 	slow_timestamp_str = slow_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+		# 	self.slow_timestamps_datetime.append(slow_timestamp)
+		# 	self.slow_timestamps_str.append(slow_timestamp_str)
+		# 	for key in self.ODB_data:
+		# 		self.ODB_data[key].append(self.ODB_PVs[key].get()) # um
 
-		except Exception:
-			logging.error(traceback.format_exc())
+		# except Exception:
+		# 	logging.error(traceback.format_exc())
 
 		return None
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -988,9 +990,9 @@ class ResonantDepolarisation():
 			with open(self.data_path / 'adc_counter_loss_2.json', 'w') as f:
 				json.dump(self.beam_loss_window_2, f)
 
-			# ODB size and offset
-			with open(self.data_path / 'ODB_data.json', "w") as f:
-				json.dump(self.ODB_data, f)
+			# # ODB size and offset # !< FIX
+			# with open(self.data_path / 'ODB_data.json', "w") as f:
+			# 	json.dump(self.ODB_data, f)
 
 			# injection timestamps as txt
 			with open(self.data_path / 'injections.txt', 'w') as f:
@@ -1026,7 +1028,7 @@ class ResonantDepolarisation():
 		except Exception:
 			logging.error(traceback.format_exc())
 
-		logging.info("\n Data saved!")
+		logging.info("Data saved!")
 
 		return None
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------	
@@ -1040,7 +1042,7 @@ class ResonantDepolarisation():
 		try:
 			logging.info("Attempting to plot ratio data...")
 		
-			sectors_to_fit: list[str] = ["1", "4", "8", "11", "12", "13"]
+			sectors_to_fit: list[str] = ["1", "4", "8", "11", "12", "13"] # ! <---- THIS NEEDS TO PROBE OOS
 			processed_data = ProcessedData(resdep=self, sectors_to_fit=sectors_to_fit)
 			processed_data.calculate_ratio_loss(sigma=200, bin=True)
 			
@@ -1174,13 +1176,27 @@ class ProcessedData():
 		# if sigma is None:
 		# 	self.resdep.
 
-		self.freqs_array = np.array(self.resdep.set_freqs) # kHz
+		self.freqs_array = np.array(self.resdep.set_freqs) # kHz # ! <----------- fix this
+		self.freqs_array = np.array(self.resdep.freqs) # kHz
 
 		for sector in self.sectors_to_fit:
 			key = f"{sector}B"
 			# add offset so no ratio is divide by zero 
 			self.resdep.beam_loss_window_1[key] = [value + 1 for value in self.resdep.beam_loss_window_1[key]]
 			self.resdep.beam_loss_window_2[key] = [value + 1 for value in self.resdep.beam_loss_window_2[key]]
+			# ensure each beam loss window has the same number of elements
+			# freqs_size = len(self.freqs_array)
+			# window_1_size = len(self.resdep.beam_loss_window_1[key])
+			# window_2_size = len(self.resdep.beam_loss_window_2[key])
+			# size_differece = int(np.abs(window_1_size - window_2_size))
+			# if window_1_size != freqs_size: # ! <----------- this needs to be better
+			# 	for i in range(size_differece):
+			# 		self.resdep.beam_loss_window_1[key].append(self.resdep.beam_loss_window_1[key][-1])
+			# if window_2_size != freqs_size:
+			# 	for i in range(size_differece):
+			# 		self.resdep.beam_loss_window_1[key].append(self.resdep.beam_loss_window_1[key][-1])
+				
+
 			self.ratio_loss[key] = np.array(self.resdep.beam_loss_window_1[key])/np.array(self.resdep.beam_loss_window_2[key])
 
 		for sector in self.sectors_to_fit:

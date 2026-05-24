@@ -44,12 +44,12 @@ class GUIGraph(FigureCanvasQTAgg):
     """
     Spawn canvas instance object to add and modify in GUI
     """
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, dpi=100):
 
         # Create the figure and figure canvas
-        self.figure = Figure()
-        self.axes = self.figure.add_subplot(111)
-        self.canvas = self.figure.canvas
+        self.figure = Figure(dpi=dpi)
+        self.canvas =  FigureCanvasQTAgg(self.figure)
+        self.axes = self.figure.add_subplot()
 
         super().__init__(self.figure) 
         self.setParent(parent)

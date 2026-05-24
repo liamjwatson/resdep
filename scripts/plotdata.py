@@ -49,7 +49,7 @@ mu: str 	= u"\u03bc"
 # --- import data
 
 data_path = Path("Z:/usr/data/resdep")
-data_path = data_path / "2026" / "2026-02-22" / "1101h"
+data_path = data_path / "2026" / "2026-05-24" / "1038h"
 print(f"folder={data_path.name}")
 if not data_path.exists():
 	raise FileNotFoundError("Incorrect path")
@@ -97,9 +97,9 @@ with open(os.path.join(data_path, 'adc_counter_loss_1.json'), 'r') as f:
 with open(os.path.join(data_path, 'adc_counter_loss_2.json'), 'r') as f:
 	beam_loss_window_2 = json.load(f)
 
-# ODB beam size and offset
-with open(os.path.join(data_path, "ODB_data.json"), "r") as f:
-	ODB_data = json.load(f)
+# # ODB beam size and offset
+# with open(os.path.join(data_path, "ODB_data.json"), "r") as f:
+# 	ODB_data = json.load(f)
 
 # Assign metadata to variables:
 if "f_rev" in metadata.keys():
@@ -122,7 +122,7 @@ resdep.tune = tune
 resdep.harmonic = harmonic
 resdep.res_freq = res_freq
 
-sectors_to_fit = ["1", "4", "8", "11", "12", "13"]
+sectors_to_fit = ["1", "4", "8", "11", "12"] # ! <---- this should probe OOS!
 processed_data = ProcessedData(resdep=resdep, sectors_to_fit=sectors_to_fit)
 processed_data.calculate_ratio_loss(sigma=200, bin=True)
 
@@ -889,6 +889,7 @@ if __name__ == "__main__":
 	plt.ion()
 	plotting.plot_ratio_loss()
 	graph.figure.show()
+	input("continue?")
 	time.sleep(1)
 	graph.axes.clear()
 	fitting.automagic_fit()

@@ -99,7 +99,9 @@ class MainWindow(QWidget):
         self.resdepQt.finished.connect(self.on_finish)
 
         # helper classes
-        sectors_to_fit = ["1", "4", "8", "11", "12", "13"]
+        sectors_to_fit = ["1", "4", "8", "11", "12"] # ! <----- FIX HERE, need to remove OOS sectors, so probably need to instance BLMs on init which im not happy about.
+        # for sector in sectors_to_fit: 
+        #     for OOS_sector in self.blm.sectors_OOS:
         self.processed_data = ProcessedData(resdep=self.resdep, sectors_to_fit=sectors_to_fit)
         self.fitting        = FittingClass(resdep=self.resdep, processed_data=self.processed_data)
         # ... self.plotting initialised in _init_plot_pane() due to plot canvas attribute
@@ -909,7 +911,7 @@ class MainWindow(QWidget):
         Interrupts resdep experiment loop.
         """
 
-        print("Abort!")
+        logging.critical("Abort!")
 
         # Disable abort button
         self.button_abort.setEnabled(False)
