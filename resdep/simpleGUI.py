@@ -19,7 +19,8 @@ from typing import Literal, Union
 import sys
 import os
 from pathlib import Path
-import logging, warnings
+import logging
+import warnings
 import subprocess
 import platform
 import numpy as np
@@ -122,7 +123,7 @@ class MainWindow(QWidget):
         # define thread for resdep
         self.thread_manager = QThreadPool()
         # decorate resdep
-        self.resdepQt = QtDecorator(self.resdep)
+        self.resdepQt = QtWorkerDecorator(self.resdep)
         # Connect emitted signals from worker (wrapped resdep)
         # to GUI update (member) functions (slots)
         self.resdepQt.progress.connect(self.on_progress_update)
@@ -583,12 +584,6 @@ class MainWindow(QWidget):
     def check_if_experiment_can_run(self, scan_type: Literal["automatic", "manual"]) -> tuple[bool, str]:
         """
         Check if the experiment can run based on the state of the machine \\
-        
-        # Current requirements: 
-        - More that 150 mA of beam current
-        - At least 95% beam polarisation
-            - Considers both time since recent injection and last diagnostic scan
-        - Must be in "User Beam" if automatic scans are enabled
 
         Parameters
         ----------
@@ -602,6 +597,13 @@ class MainWindow(QWidget):
         error: str
             Error message for why (specifically or first offending requirement) the experiment cannot run \\
             Displayed on the results panel.
+        
+        Requirements
+        ------------
+        1. More that 150 mA of beam current
+        2. At least 95% beam polarisation
+            1. Considers both time since recent injection and last diagnostic scan
+        3. Must be in "User Beam" if automatic scans are enabled
         """
         verdict: bool = False
         error  : str  = "No error"
@@ -646,11 +648,11 @@ class MainWindow(QWidget):
             warnings.warn(error)
             return False, error
         elif self.polarisation < 95: # %
-            error = f"Beam polarisation is less than 95%; not enough resolution.\nAborting request to run resdep."
+            error = "Beam polarisation is less than 95%; not enough resolution.\nAborting request to run resdep."
             warnings.warn(error)
             return False, error
         elif recent_beam_injection:
-            error = f"Beam has been injected too recently and has not have enought time to polarise (requires at least 39 minutes)."
+            error = "Beam has been injected too recently and has not have enought time to polarise (requires at least 39 minutes)."
             warnings.warn(error)
             return False, error
         elif scan_type == "automatic" and beam_mode < 8: # not "User Beam" in automatic mode
@@ -705,7 +707,7 @@ class MainWindow(QWidget):
             answer = QMessageBox.question(
                 self, 
                 "Continue?", 
-                f"WARNING: May drive betatron tunes if they're off.\nDANGER ZONE: v_y = [0.097, 0.145] and v_y = [0.855, 0.903].\nContinue?",
+                "WARNING: May drive betatron tunes if they're off.\nDANGER ZONE: v_y = [0.097, 0.145] and v_y = [0.855, 0.903].\nContinue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             # if yes
@@ -756,7 +758,7 @@ class MainWindow(QWidget):
                 answer = QMessageBox.question(
                     self, 
                     "Abort experiment?", 
-                    f"Diagnostic is still running. Do you want to abort it?",
+                    "Diagnostic is still running. Do you want to abort it?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
 
@@ -836,7 +838,7 @@ class MainWindow(QWidget):
 # ---- Qt Decorator ---- #
 # ---- (threadding) ---- #
 ##########################
-class QtDecorator(QObject):
+class QtWorkerDecorator(QObject):
     """
     Qt wrapper for resdep \\
     Defines emitted signals and attaches them to the worker. \\
@@ -908,7 +910,7 @@ class QtDecorator(QObject):
 
 def spawn():
     app = QApplication(sys.argv)
-    window = MainWindow()
+    MainWindow()
     if hasattr(sys, "ps1"): # interactive check
         app.exec()
     else:

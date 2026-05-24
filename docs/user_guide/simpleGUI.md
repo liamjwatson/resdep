@@ -1,30 +1,3 @@
-# Resonant Depolarisation
-## Purpose
-
-## Physics
-$$
-    P_0 = \frac{W_{\uparrow\downarrow}-W_{\downarrow\uparrow}}{W_{\uparrow\downarrow}+W_{\downarrow\uparrow}} = \frac{8}{5\sqrt{3}} = 92.38\%
-$$
-
-$$
-    E 
-    =
-    \left(
-        \frac{f_\mathrm{rdp}}{f_\mathrm{rev}} \mp n 
-    \right)
-    \frac{m_e c^2}{a_g},
-    \quad \text{where} \quad
-    f_\mathrm{rdp} 
-    = 
-    f_\mathrm{rev} \left(
-        [a_g \gamma] \pm n
-    \right)
-$$
-
-## Code workflow
-
-# SimpleGUI
-
 ## Overview
 A simple graphical user interface (GUI) for use during user beam before there is a built-in GUI for Kubili. Intended used by operators and physics staff to regularly measure the beam energy. Consists of a results panel (left hand side), a control panel (right hand side), and both progress and status bars. 
 

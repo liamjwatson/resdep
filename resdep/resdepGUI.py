@@ -18,7 +18,8 @@ import sys
 import json
 import os
 from pathlib import Path
-import logging, traceback
+import logging
+import traceback
 import subprocess
 import platform
 import warnings
@@ -75,6 +76,8 @@ class MainWindow(QWidget):
     The Qt GUI for Resonant Depolarisation
     """
     def __init__(self, *args, **kwargs):
+        """Configure GUI layout, load all necessary functional components for experiment.
+        """
         super().__init__(*args, **kwargs)
 
         # perpetual GUI settings
@@ -87,7 +90,7 @@ class MainWindow(QWidget):
         # define thread for resdep
         self.thread_manager = QThreadPool()
         # decorate resdep
-        self.resdepQt = QtDecorator(self.resdep)
+        self.resdepQt = QtWorkerDecorator(self.resdep)
         # Connect emitted signals from worker (wrapped resdep)
         # to GUI update (member) functions (slots)
         self.resdepQt.progress.connect(self.on_progress_update)
@@ -992,7 +995,7 @@ class MainWindow(QWidget):
 # ---- Qt Decorator ---- #
 # ---- (threadding) ---- #
 ##########################
-class QtDecorator(QObject):
+class QtWorkerDecorator(QObject):
     """
     Qt wrapper for resdep \\
     Defines emitted signals and attaches them to the worker. \\
@@ -1064,7 +1067,7 @@ class QtDecorator(QObject):
 
 def spawn():
     app = QApplication(sys.argv)
-    window = MainWindow()
+    MainWindow()
     if hasattr(sys, "ps1"): # interactive check
         app.exec()
     else:

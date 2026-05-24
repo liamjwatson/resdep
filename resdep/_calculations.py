@@ -1,5 +1,5 @@
 """
-Functions for calculating beam energy and related
+Functions for calculating beam energy, tunes, and rounding errors and values to significant figures.
 """
 """
  ██████╗ █████╗ ██╗      ██████╗██╗   ██╗██╗      █████╗ ████████╗██╗ ██████╗ ███╗   ██╗███████╗

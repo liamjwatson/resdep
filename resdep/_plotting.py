@@ -1,9 +1,5 @@
 """                                                              
-Class mixins (not general) for resdepGUI related to plotting to the matplotlib canvas in the GUI.
-
-ONLY for use (import) in resdepGUI
-
-@Author Liam Watson
+Helper Class resdep related to plotting to the matplotlib canvas in the GUI.
 """
 """
 ██████╗ ██╗      ██████╗ ████████╗████████╗██╗███╗   ██╗ ██████╗ 
@@ -63,8 +59,8 @@ class GUIGraph(FigureCanvasQTAgg):
     
 class StandaloneGraph():
     """
-    Spawn an interactive graph object to plot to manually. \\
-    Defines canvas correctly so that draw.idle() can be effective overrided.
+    Spawn an interactive graph object to plot to manually.
+    Defines canvas correctly so that `draw.idle()` can be effective utilised/overrided.
     """
     def __init__(self,):
 
@@ -76,6 +72,20 @@ class StandaloneGraph():
 # ----------------------------------------------------------------------------------------------------------------------------------------------------
 
 class PlottingClass():
+    """Helper class for plotting beam loss data generated from the Resonant Depolarisation experiment.
+
+    Attributes
+    ----------
+    mask: Union[npt.NDArray[np.bool_], "builtins.ellipsis"]
+        Binary mask, used to plot/fit over a restricted frequency range.
+
+    Info
+    ----
+    [`ResonantDepolarisation`][resdep.experiment.ResonantDepolarisation] and 
+    [`ProcessedData`][resdep.experiment.ProcessedData]
+    are passed in by reference when instanced. This is to reduce the number of args passed in and returned
+    by helper functions.
+    """
     def __init__(self, resdep: "ResonantDepolarisation", processed_data: "ProcessedData", graph: Union[GUIGraph, StandaloneGraph]):
         # Required
         self.resdep         = resdep
@@ -86,12 +96,17 @@ class PlottingClass():
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def plot_ratio_loss(self, ):
         """
-        Takes the ratio of the beam loss windows between the two ADC windows and plots the result. \\
-        Data is smoothed by a gaussian function with a sigma defined on the GUI, or by standard binning (200 points).
+        Plots the ratio of the losses between the two ADC windows.
 
-        ## First requires (from `resdep.experiment`)
-        1. Instance :class:`ProcessedData`
-        2. run member function :func:`ProcessedData().calculate_ratio_loss`
+        
+        Tip
+        ---
+        First requires (from [`resdep.experiment`][])
+
+        1. Instance [`ProcessedData`][resdep.experiment.ProcessedData]
+        2. Run member function [`calculate_ratio_loss`][resdep.experiment.ProcessedData.calculate_ratio_loss]
+
+        Data is smoothed by a gaussian function with a sigma defined on the GUI, or by standard binning (200 points).
         """
         try:
             for sector in self.processed_data.sectors_to_fit:
@@ -121,8 +136,9 @@ class PlottingClass():
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def calculate_fitting_mask(self) -> npt.NDArray[np.bool_]:
         """
-        Grabs the current limits of the interactive plot (including when it is zoomed in) and calculates the frequency range displayed. \\
-        This is then used as a mask to fit error functions in `fit_error_functions()`
+        Grabs the current limits of the interactive plot (including when it is zoomed in) and calculates the frequency range displayed. 
+        Used by [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions], and 
+        [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
 
         Returns
         -------
@@ -140,13 +156,20 @@ class PlottingClass():
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def plot_fits(self, ) -> None:
         """
-        Plots the cumulative distribution function fit, intended on-top of the existing data \\
-        Shades two standard deviations around the mean
+        Plots the cumulative distribution function fit, intended on-top of the existing data.
+        Shades two standard deviations around the mean.
 
-        ## First requires 
-        using :class:`FittingClass` (from :mod:`resdep._fitting`)
-        1. :meth: `fit_error_functions` or :meth:`automagic_fit` 
-        2. :meth:`calculate_fitted_energy_stats`
+        Raises
+        ------
+        KeyError
+            If no fit data is stored in [`ProcessedData`][resdep.experiment.ProcessedData].
+
+        Tip
+        ---
+        First requires: (from [`resdep._fitting`][])
+
+        1. Executing [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions] or [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
+        2. Then [`calculate_fitted_energy_stats`][resdep._fitting.FittingClass.calculate_fitted_energy_stats]
         """
         y_model     = self.processed_data.y_model
         E0_mean     = self.processed_data.E0_mean
@@ -184,8 +207,8 @@ class PlottingClass():
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def plot_expected_resonances(self, ) -> None:
         """
-        Plots the expected resoanaces around the main (spin tune resonance). \\
-        This includes synchrotron sidebands and betatron resonances. \\
+        Plots the expected resonances around the main (spin tune resonance).
+        This includes synchrotron sidebands and betatron resonances. 
         Updates dynamically on Qt GUI settings pane changes.
         """
     

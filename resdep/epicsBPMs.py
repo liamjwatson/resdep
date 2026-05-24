@@ -13,7 +13,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Union
 from pathlib import Path
 import warnings
-import logging, traceback
+import logging
+import traceback
 import json
 import numpy as np
 import numpy.typing as npt
@@ -25,55 +26,85 @@ class BPMs(ABC):
 
     Current scope is only for storage ring and MX3 BPMs, and TBPMs.
 
-    ## Attributes
-
-    :attr:`x_position_PVs`: *dict[str, Any]*
-        Dictionary of PVs accessing the x-position readback. See your subclass for key format. \\
-        Equivalent dictionaries for :attr:`y_position_PVs` and :attr:`intensity_PVs`
-    :attr:`x_position`: *dict[str, list[float]]*
-        Dictionary of x-position readback values for storage (to append from PV.get()). See your subclass for key format. \\
-        Equivalent dictionaries for :attr:`y_position` and :attr:`intensity`
-    :attr:`position_unit`: *str*
+    Attributes
+    ----------
+    x_position_PVs, y_position_PVs, intensity_PVs: dict[str, Any]
+        Dictionary of PVs accessing the x/y-position or intensity readback. See your subclass for key format.
+    x_position, y_position, intensity: dict[str, list[float]]
+        Dictionary of x/y-position or intensity readback values for storage (to append from `PV.get()`). See your subclass for key format.
+    position_unit: str
         Units of the position values. Typically nm or microns.
-    :attr:`position_unit_scale`: *float*
+    position_unit_scale: float
         Scientific units representing the scale, e.g. nm = 1e-9.
-    :attr:`bpm_separations`: *dict[str, float]* | *None*
-        Separation between adjacent BPMs in m. Keys follow `bpm1|bpm2` in reference to your subclass's keys.
+    bpm_separations: dict[str, float] | None
+        Separation between adjacent BPMs in meters. Keys follow `bpm1|bpm2` in reference to your subclass's keys.
 
-    ## Abstract methods
-    
-    :meth:`connect`
-        Connect to EPICS PVs. Must be overwritten and configured in your subclass. 
-
-    ## Standard Methods
-
-    :meth:`calculate_angles`
-        Calculates the angle of the beam (yaw and pitch) between adjacent BPMs. \\
-        Requires definition of :attr:`position_unit`, :attr:`position_unit_scale`: and :attr:`bpm_separations`.
-    
-    ## Member functions
-    
-    :meth:`record_data`
-        Appends readback of PV to storage dictionary. \\
-        e.g. :attr:`x_position` <-- :attr:`x_position_PVs`
-    
-    :meth:`save_data`
+    Methods
+    -------
+    connect
+        Connect to EPICS PVs. Abstract method -- Must be overwritten and configured in your subclass.
+    calculate_angles
+        Calculates the angle of the beam (yaw and pitch) between adjacent BPMs. 
+        Requires definition of position_unit, position_unit_scale and bpm_separations.
+    record_data
+        Appends readback of PV to storage dictionary. 
+        e.g. `x_position` <-- `x_position_PVs`
+    save_data
         Saves all storage dictionaries to passed `path` arg as .json. 
-        
-    :meth:`load_from_finished_experiment`
+    load_from_finished_experiment
         Loads saved .json files at passed arg `path`. Populates storage dictionaries in BPM instance.
+
+    Warning
+    -------
+    `connect` is an abstract method that must be overwritten in the subclass. 
+    In this method, you should populate the dictionaries `x_position_PVs`, `y_position_PVs`, and `intensity_PVs`, 
+    using a [`str`][] key and an `epics.pv` value.
+
+    Similarly, you must define `position_unit`, `position_unit_scale` and `bpm_separations` in the 
+    subclass `__init__` if you want to call [`calculate_angles`][resdep.epicsBPMs.BPMs.calculate_angles]. 
+
+    Examples
+    --------
+
+    ```py title="Define subclass"
+    Foo_BPMs(BPMs): ...
+        def __init__(self):
+            # define units (x/y pos from EPICS readback)
+            position_unit       = "nm"
+            position_unit_scale = 1e-9
+            # populate bpm_separations 
+            bpm_separations["1|2"] = 1.2345 # meters
+            bpm_separations["2|3"] = 2.3456 # meters
+            bpm_separations["3|4"] = ...
+    # override abstract class `connect`
+        def connect(self,): ...
+    ```
+
+    ```py title="Instancing"
+    foo_bpms = Foo_BPMs()
+    foo_bpms.connect()
+    
+    for i in range(60):
+        foo_bpms.record_data()
+        time.sleep(1)
+    foo_bpms.save_data()
+    
+    pitch, yaw = foo_bpms.calculate_angles()
+    plt.plot(yaw["1|2"]) # plot yaw between bpm 1 and bpm 2
+    ```
+
     """
     def __init__(self, ) -> None:
 
         # --- PVs
-        self.x_position_PVs: dict[str, Any] = {}
-        self.y_position_PVs: dict[str, Any] = {}
-        self.intensity_PVs : dict[str, Any] = {}
+        self.x_position_PVs: dict[str, Any]
+        self.y_position_PVs: dict[str, Any]
+        self.intensity_PVs : dict[str, Any]
 
         # --- data
-        self.x_position: dict[str, list[float]] = {}
-        self.y_position: dict[str, list[float]] = {}
-        self.intensity : dict[str, list[float]] = {}
+        self.x_position: dict[str, list[float]]
+        self.y_position: dict[str, list[float]]
+        self.intensity : dict[str, list[float]]
 
         # --- position units for each EPICS readback
         # (different bpms have different EPICS engineering units)
@@ -84,73 +115,88 @@ class BPMs(ABC):
         # keys: `bpm1|bpm2`. See your invoked instance for `bpm` naming scheme.
         self.bpm_separations: Union[dict[str, float], None] = None
 
-        # --- states
-        self._got_PVs = False
-
         return None
     # -----------------------------------------------------------------------------------------------------------------------
+    def __init_subclass__(cls) -> None:
+        """Automatically decorate abstract method `connect` with private decorator function
+        which populates the storage dicts.
+        """
+        super().__init_subclass__()
+        cls.connect = cls._connect_decorator(cls.connect)
+    # -----------------------------------------------------------------------------------------------------------------------
     @abstractmethod
-    def connect(self, ): 
-        pass
+    def connect(self, ): ...
     # -----------------------------------------------------------------------------------------------------------------------
     @staticmethod
-    def _decorator_connect_state(decorated: Callable):
+    def _connect_decorator(function: Callable):
         """
-        Decorates connect with a state check. Only want to grab PVs once.
+        Decorates connect with a state check. Only want to grab PVs once. Populates PV and storage dicts with keys.
         """
-        def wrapper(self,):
+        def wrapper(self, *args, **kwargs):
 
-            if self._got_PVs:
-                warnings.warn("Already grabbed BPM PVs.")
+            # check if PVs have loaded
+            if all(hasattr(self, attr) for attr in ["x_position_PVs", "y_position_PVs", "intensity_PVs"]):
+                logging.warning("Request to connect, but BPM PVs already loaded!")
                 return None
-            
+
+            # --- PVs
+            self.x_position_PVs = {}
+            self.y_position_PVs = {}
+            self.intensity_PVs  = {}
+           
             # run connect
-            decorated(self)
+            function(self, *args, **kwargs)
+
+            # --- data
+            self.x_position     = {}
+            self.y_position     = {}
+            self.intensity      = {}
 
             for key in self.x_position_PVs:
                 self.x_position[key] = []
                 self.y_position[key] = []
                 self.intensity[key]  = []
-
-            self._got_PVs = True
         
         return wrapper
     # -----------------------------------------------------------------------------------------------------------------------
     def calculate_angles(self, loop_around: bool = False) -> tuple[dict[str, npt.NDArray[np.floating]], ...]:
         """
-        Calculates yaw (angle in *x*) and pitch (angle in *y*) between each BPM in *micro radians*\\
-        Schematic (angle calculated is `@`):
-                  
-                      pos 1                       
-            ┌───────────x────┐                    
-            └───────────┬────┘BPM n     Downstream
-                       /│                   │     
-                      /@│                   │     
-                     /  │                   │     
-                    /   │                   │     
-                   /    │                   │     
-                  /     │                   │     
-                 /      │                   │     
-            ┌───▼───────▼────┐              ▼     
-            └───x────────────┘BPM n+1    Upstream 
-             pos 2                                
+        Calculates yaw (angle in *x*) and pitch (angle in *y*) between each BPM in *micro radians*.
                 
         Parameters
         ----------
-        loop_around: bool
-            Enables angle calculation between the last and first BPM (in the storage ring for instance). \\
-            Default: `False`
+        loop_around: bool, default: False
+            Enables angle calculation between the last and first BPM (in the storage ring for instance).
 
         Returns
         -------
         yaw: dict[str, npt.NDArray[np.floating]]
-            Angle in horizontal plane *x* between two neighbouring BPMs. \\
-            Units: *micro radians* \\
-            keys: `bpm1|bpm2`. See your invoked instance for `bpm` naming scheme.
+            Angle in horizontal plane *x* between two neighbouring BPMs.
         pitch: dict[str, npt.NDArray[np.floating]]
-            Angle in vertical plane *y* between two neighbouring BPMs. \\
-            Units: *micro radians* \\
-            keys: `bpm1|bpm2`. See your invoked instance for `bpm` naming scheme.
+            Angle in vertical plane *y* between two neighbouring BPMs. 
+
+        Notes
+        -----
+        - All angles are in units: *micro radians*.
+        - [`dict`][] keys: `bpm1|bpm2`. See your invoked instance for `bpm` naming scheme.
+
+        Schematic
+        ---------
+        Schematic (angle calculated is `@`):
+
+            +----------------+          Downstream     
+            |         pos 1  | BPM n        |
+            +-----------▼----+              |
+                       /.                   │     
+                      /@.                   │     
+                     /  .                   │     
+                    /   .                   │     
+                   /    .                   │     
+                  /     .                   │     
+                 /      .                   │     
+            +---▼------------+              |    
+            | pos 2          | BPM n+1      ▼
+            +----------------+           Upstream 
         """
 
         logging.info(f"Calculating pitch and yaw. Input units: {self.position_unit} ({self.position_unit_scale})")
@@ -190,23 +236,23 @@ class BPMs(ABC):
     # -----------------------------------------------------------------------------------------------------------------------
     def record_data(self, ) -> None:
         """
-        Updates class scope dictionaries with values from `PV.get()`
+        Updates dictionary attributes (pos, intensity) with values from `epics.PV.get()`.
         """
 
-        for key in self.x_position_PVs:
-            x_pos       = self.x_position_PVs[key].get()
-            y_pos       = self.y_position_PVs[key].get()
-            intensity   = self.intensity_PVs[key].get()
+        for bpm in self.x_position_PVs:
+            x_pos       = self.x_position_PVs[bpm].get()
+            y_pos       = self.y_position_PVs[bpm].get()
+            intensity   = self.intensity_PVs[bpm].get()
 
-            self.x_position[key].append(x_pos)
-            self.y_position[key].append(y_pos)
-            self.intensity[key].append(intensity)
+            self.x_position[bpm].append(x_pos)
+            self.y_position[bpm].append(y_pos)
+            self.intensity[bpm].append(intensity)
 
         return None
     # -----------------------------------------------------------------------------------------------------------------------
     def save_data(self, path: Union[Path, None] = None, ) -> None:
         """
-        Dumps `x`/`y_position` attributes to `.json` files in folder `path`
+        Dumps `x`/`y_position` attributes to .json files in folder at `path`.
 
         Parameters
         ----------
@@ -232,13 +278,18 @@ class BPMs(ABC):
     # -----------------------------------------------------------------------------------------------------------------------
     def load_from_finished_experiment(self, path: Path) -> None:
         """
-        Loads attributes from saved .json files in a finished experiment data folder. \\
-        Each path should be to the specific BPM, i.e. `path=".../1713h/BPMs/MX3/"`
+        Loads attributes from saved .json files in a finished experiment data folder.
+        Each path should be to the specific BPM, *e.g.* `path=".../1713h/BPMs/MX3/"`
 
         Parameters
         ----------
         path: Path
             Path to save folder
+
+        Raises
+        ------
+        ValueError
+            If path is a file, not a directory.
         """
 
         if not path.is_dir():
@@ -277,26 +328,29 @@ class SR_BPMs(BPMs):
     # -----------------------------------------------------------------------------------------------------------------------
     def generate_bpm_separations(self,) -> None:
         """
-        Generate a dictionary of the of separations between each BPM in the storage ring. \\
-        Dict keys: `{bpm}|{next_bpm}` \\
+        Generate a dictionary of the of separations between each BPM in the storage ring. 
+        
+        Info
+        ----
+        Called in `__init__`.
+        Dict keys: `{bpm}|{next_bpm}` 
         Based on the following information:
 
         BPM locations:
-        1:  2.304 m (after straight)
-        2:  3.884 m (after quad 1)
-        3:  6.020 m (after bend 1)
-        4:  7.901 m (after sextapole 4)
-        5:  9.420 m (before bend 2)
-        6: 11.556 m (after bend 2)
-        7: 13.125 m (before next straight)
 
-        Distance between sectors / straights (BPM 7-->1)
-        Straights [1,...,5] : 4.422 m
-        Straights [6,7]     : 2.266 m 
-        Straights [8,...,14]: 4.422 m
+        1.  2.304 m (after straight)
+        2.  3.884 m (after quad 1)
+        3.  6.020 m (after bend 1)
+        4.  7.901 m (after sextapole 4)
+        5.  9.420 m (before bend 2)
+        6. 11.556 m (after bend 2)
+        7. 13.125 m (before next straight)
 
-        ## Key attributes:
-        :attr:`bpm_separations`
+        Distance between sectors / straights (BPM 7-->1):
+
+        - Straights [1,...,5] : 4.422 m
+        - Straights [6,7]     : 2.266 m 
+        - Straights [8,...,14]: 4.422 m
         """
         # --- generate bpm separations
         # NOTE: this doesn't quite add up to 216 m. About 3 m out, need to check where the discrepancy is
@@ -333,10 +387,9 @@ class SR_BPMs(BPMs):
 
         return None
     # -----------------------------------------------------------------------------------------------------------------------
-    @BPMs._decorator_connect_state
     def connect(self, ) -> None:
         """
-        Load :attr:`x_position`, :attr:`y_position` and :attr:`intensity` PVs. Also initates storage attributes (dicts) \\
+        Load `x_position`, `y_position` and `intensity` PVs. 
         Key format: `sector:bpm`, *e.g.* `"11:4"`
         """
 
@@ -350,11 +403,12 @@ class SR_BPMs(BPMs):
 
 class MX3_BPMs(BPMs): 
     """
-    Collection of MX3 BPMs in the optical front end / photon delivery system (PDS) \\
-    Subclass of BPMs
+    Collection of MX3 BPMs in the optical front end / photon delivery system (PDS).
 
-    Position units (EPICS): *micron* \\ 
-    Intensity units: *nano amp*
+    Info
+    ----
+    - Position units (EPICS): *micron* 
+    - Intensity units: *nano amp*
     """
     def __init__(self, ) -> None:
         super().__init__()
@@ -378,14 +432,17 @@ class MX3_BPMs(BPMs):
 
         return None
     # -----------------------------------------------------------------------------------------------------------------------
-    @BPMs._decorator_connect_state
     def connect(self, ) -> None:
         """
-        Load :attr:`x_position`, :attr:`y_position`, and :attr:`intensity` PVs. Also initates storage attributes (dicts) \\
-        Key format: `BPM number`, e.g. `"4"` 
+        Load `x`/`y_position` and `intensity` PVs. Also initates storage attributes ([`dicts`][dict]). Key format: `BPM number`, e.g. `"4"`.
+
         
-        `|-------------------- Hutch C -------------------------|-- Hutch B --|-- Hutch A --|-- SR ---` \\
-        `|Detector <-- BPM 4 <----- BPM 3 <----------- BPM 5 <------ BPM 2 <------ BPM 1 <---- Beam --`
+        Layout
+        ------
+        ```
+            |-------------------- Hutch C -------------------------|-- Hutch B --|-- Hutch A --|-- SR ---
+            |Detector <-- BPM 4 <----- BPM 3 <----------- BPM 5 <------ BPM 2 <------ BPM 1 <---- Beam --
+        ```
         """
 
         for bpm in [1, 2, 5, 3, 4]:
@@ -409,9 +466,10 @@ class TBPMs(BPMs):
 
         return None    
     # -----------------------------------------------------------------------------------------------------------------------
-    @BPMs._decorator_connect_state
     def connect(self, ) -> None:
-
+        """Load `x_position`, `y_position` and `intensity` PVs. 
+        Key format: `bpm`, *e.g.* `"2"`
+        """
         for bpm in [1, 2]:
             self.x_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:X_POSITION_MONITOR", connect=True)
             self.y_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:Y_POSITION_MONITOR", connect=True)

@@ -10,6 +10,7 @@ dependencies = [
   "numpy==2.0.2", 
   "matplotlib==3.9.4",
   "scipy==1.13.1", 
+  "mkdocstrings[python]>=0.18"
   ]
 authors = [
   { name="Liam Watson", email="watsonl@ansto.gov.au" },

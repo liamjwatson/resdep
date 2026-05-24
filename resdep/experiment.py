@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Resonant depolarisation experiment (class) \\
-Designed to called through one of the GUIs (resdepGUI, simpleGUI) \\
+Resonant depolarisation experiment (class).
+Designed to called through one of the GUIs (resdepGUI, simpleGUI).
 Can also be instanced and run natively in command line.
 """
 """
@@ -28,10 +28,13 @@ Can also be instanced and run natively in command line.
 from dataclasses import dataclass, field
 import platform
 import builtins
-from typing import Union, Any
-import logging, traceback, warnings
+from typing import Union, Any, Callable
+import logging
+import traceback
+import warnings
 import epics
-import time, datetime
+import time
+import datetime
 from pathlib import Path
 import json
 import matplotlib.pyplot as plt
@@ -49,39 +52,51 @@ from resdep._progressBars import printProgressBar
 
 class ResonantDepolarisation():
 	"""
-	Resdep class that stores key variables to and functions to run the experiment. \\
-	Is written to (optionally) take in additional Qt callback functionality, but is not required. \\
+	Resdep class that stores key variables to and functions to run the experiment.
+	Is written to (optionally) take in additional Qt callback functionality, but is not required.
 	Therefore, it can be run in the terminal, or through `resdepGUI` / `simpleGUI`. 
 
-	## Key attributes
-	
-	:attr:`res_freq`: *float* 
+	Attributes
+	----------
+	res_freq: float
 		Resonant frequency of the spin tune. 
-	:attr:`harmonic`: *int*
+	harmonic: int
 		Harmonic of the resonant frequency.
-	:attr:`bounds`: *float*
-		The energy bounds (plus minus, as a decimal) over which to scan. \\
+	bounds: float
+		The energy bounds (plus minus, as a decimal) over which to scan. 
 		Usually on the order of 0.05%
-	:attr:`set_kicker_amp`: *float* 
+	set_kicker_amp: float
 		Kicker amplifier (percentage as decimal).
 		Defaults to 0.5 (50%).
-	:attr:`set_drive_pattern`: 
-		The bunches to be driven. \\
+	set_drive_pattern: str
+		The bunches to be driven. 
 		Takes form `"start_bunch:end_bunch"`.
-	:attr:`sweep_rate`: *float*
+	sweep_rate: float
 		The rate at which the kicker frequencies are swept over.
-		Defaults to 5 Hz/s. \\ 
-		**Warning**: values over 10 Hz/s may be too fast to effectively depolarise.
-	:attr:`set_adc_counter_offset_1`: int | :attr:`set_adc_counter_window_1`: *int*
-		One set of the ADC (analog to digital converter) offset / window applied to the beam loss monitors. \\
-		Used to separate the beam into two charge equivalent halves, only one of which is depolarised. \\
+		Defaults to 5 Hz/s. 
+	set_adc_counter_offset_1, set_adc_counter_window_1: int
+		One set of the ADC (analog to digital converter) offset / window applied to the beam loss monitors.
+		Used to separate the beam into two charge equivalent halves, only one of which is depolarised. 
 		The ratio of the losses between the polarised and depolarised halves are used to indicate the spin tune.
-	:attr:`set_freqs`: *list[float]*
+	freqs: list[float]
+		Readback of BbB kicker frequency (slow ~ 0.5 Hz) 
+	set_freqs: list[float]
 		Frequency values during the experiment sweep
-	:attr:`beam_loss_window_1`: *dict[str, list[float]]*
-		Beam loss from the first ADC window. \\
-		Keys of the form ``"{sector}{section}"``, \\ 
+	beam_loss_window_1: dict[str, list[float]]
+		Beam loss from the first ADC window. 
+		Keys of the form ``"{sector}{section}"``. 
 		where section is either A = straight, or B = bend. e.g. `"4A"`
+	
+	Warning
+	-------
+	`sweep_rate` values over 10 Hz/s may be too fast to effectively depolarise.
+
+	Note
+	----
+	This Class is passed by reference when instancing the [processed data][resdep.experiment.ProcessedData] class, 
+	and helper classes for [fitting][resdep._fitting.FittingClass] and [plotting][resdep._plotting.PlottingClass].
+	This is to access exact experiment parameters that change slightly between each sweep, such as revolution frequency.
+
 	"""
 
 	# variables defined here change across all instances of ResonantDepolarisation.
@@ -104,7 +119,60 @@ class ResonantDepolarisation():
 
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	#
-	def __init__(self, *, progress_callback=None, plot_callback=None, status_callback=None, data_path_callback=None, timer_callback=None, ADC_windows_callback=None) -> None:
+	def __init__(
+			self, 
+			*, 
+			progress_callback		: Union[Callable, None]=None, 
+			plot_callback			: Union[Callable, None]=None, 
+			status_callback			: Union[Callable, None]=None, 
+			data_path_callback		: Union[Callable, None]=None, 
+			timer_callback			: Union[Callable, None]=None, 
+			ADC_windows_callback	: Union[Callable, None]=None
+		) -> None:
+		"""Initialise default scan values.
+		
+		Parameters
+		----------
+		progress_callback:
+		    Passed progress update (`step`: [`int`][]) emitted by worker function spawned by GUI.
+			Links to progress bar in either [`resdepGUI`][resdep.resdepGUI.MainWindow.on_progress_update] or 
+			[`simpleGUI`][resdep.simpleGUI.MainWindow.on_progress_update]
+		plot_callback: 
+		    Live plotting data (`freqs`, `beam_loss_window_1`, `beam_loss_window_2`) 
+			plotted to [`resdepGUI`][resdep.resdepGUI.MainWindow.on_new_plot_info].
+		status_callback: 
+		    Experiment status ([`str`][]) to displayed on either
+			[`resdepGUI`][resdep.resdepGUI.MainWindow.on_status_update] or 
+			[`simpleGUI`][resdep.simpleGUI.MainWindow.on_status_update]
+		data_path_callback: 
+		    data path ([`pathlib.Path`][]) to passed to GUI for saving GUI config / settings.
+		timer_callback: 
+		    An emitted signal of when to start / stop the experiment timer.
+			Links to [`resdepGUI`][resdep.resdepGUI.MainWindow.on_start_timer]
+		ADC_windows_callback: 
+		    Pass back ADC windows applied to BLMs, 
+			specifically for [`resdepGUI`][resdep.resdepGUI].
+
+		Examples
+		--------
+		Example usage / implementation in the `Class` scope.
+
+		```py
+		self.status_callback("Finished!")
+
+		path = Path("usr/data/example")
+		self.data_path_callback(path)
+		
+		self.timer_callback()
+		```
+		
+		Notes
+		-----
+		See configuration of callbacks in 
+		[`QtWorkerDecorator`][resdep.resdepGUI.QtWorkerDecorator] and the [GUI][resdep.resdepGUI.MainWindow.__init__].
+
+		Calls [`calculate_range`][resdep.experiment.ResonantDepolarisation.calculate_range] on default values.
+		"""
 		# --- init callbacks for Qt functionality
 		self.progress_callback 		= progress_callback 	or (lambda *args, **kwargs: None)
 		self.plot_callback 			= plot_callback 		or (lambda *args, **kwargs: None)
@@ -165,8 +233,22 @@ class ResonantDepolarisation():
 		"""
 		Resonant depolarisation experiment, uses kicker to depolarise bunches, and measures the corresponding beam loss.
 		
-		Workflow
-		--------
+		Attributes
+		----------
+		set_kicker_amp: float
+			Kicker amplifier setpoint, as decimal (0--1)
+		set_sweep_freq: float
+			Kicker frequency setpoint, kHz
+		beam_loss_window_1, beam_loss_window_2: dict[str, list[float]]
+			Beam loss from each ADC window across every sector
+
+		Raises
+		------
+		KeyboardInterrupt:
+			On abort request, or from terminal
+
+		Notes: Workflow
+		-----
 		- Initialises the experiment (calculates f_rev, frequency range for sweep, loads PVs, configs save files)
 		- Takes 10s of baseline data (with the kicker turned off)
 		- Initialises kicker (drive) panel with set amplitude and frequency
@@ -180,8 +262,6 @@ class ResonantDepolarisation():
 		- When finished
 			- Turns off kicker drive and resets BLM decimation / ADC windows.
 			- Saves and plots data on experiment end or KeyboardInterrupt
-		
-		### Also
 		- Listens for injections -> turns off kicker and sleeps for 10 s (through PV callback :func:`onValueChange`)
 		- Listens for abort requests from the optional GUIs
 		- Updates experiment progress to progress bar on GUI or console
@@ -370,13 +450,24 @@ class ResonantDepolarisation():
 	def calculate_range(self, ) -> None:
 		"""
 		Calculates the frequency and energy range over which the experiment sweeps.
+
+		Attributes
+		----------
+		res_freq: float
+			Expected resonant frequency of the spin tune
+		sweep_limits: list[float]
+			Frequency limits of the sweep
+		dwell_time: float
+			Time (in seconds) spent kicking at each frequency
+		estimated_sweep_time: str
+			Estimated time of the experiment sweep, in seconds
 		"""
 		# --- calcs
-		self.intrinsic_res_freq 	: float 		= self.f_rev * (self.tune + 0) + self.freq_shift				# 0th order, kHz
-		self.res_freq		   		: float 		= self.f_rev * (self.tune + self.harmonic) + self.freq_shift	# harmoinc order, kHz
-		self.expected_energy 		: float 		= (self.tune+6) * self.m_e * self.c**2 / (self.a_g * self.e) 	# eV
-		self.expected_energy_bounds : float 		= self.expected_energy * self.bounds						 	# eV
-		self.expected_energy_limits : list[float] 	= [self.expected_energy - self.expected_energy_bounds, self.expected_energy + self.expected_energy_bounds] # eV
+		self.intrinsic_res_freq		: float 		= self.f_rev * (self.tune + 0) + self.freq_shift				# 0th order, kHz
+		self.res_freq				: float 		= self.f_rev * (self.tune + self.harmonic) + self.freq_shift	# harmoinc order, kHz
+		self.expected_energy		: float 		= (self.tune+6) * self.m_e * self.c**2 / (self.a_g * self.e) 	# eV
+		self.expected_energy_bounds	: float 		= self.expected_energy * self.bounds						 	# eV
+		self.expected_energy_limits	: list[float] 	= [self.expected_energy - self.expected_energy_bounds, self.expected_energy + self.expected_energy_bounds] # eV
 		self.freq_bounds			: float			= self.f_rev*((self.tune + 6)*self.bounds)						# kHz
 		self.sweep_limits 			: list[float] 	= [self.res_freq-self.freq_bounds, self.res_freq+self.freq_bounds] 	# kHz
 		self.sweep_range 			: float 		= self.freq_bounds*2											# kHz
@@ -398,7 +489,12 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def load_PVs(self, ) -> None:
 		"""
-		Loads all EPICS process variables (PVs) required to run the experiment and those important for experiment metadata (e.g. LCW temp)
+		Loads all EPICS process variables (PVs) required to run the experiment 
+		and those important for experiment metadata (e.g. LCW temp)
+
+		Notes
+		-----
+		Calls upon extensible Classes [`BLMs`][resdep.epicsBLMs.BLMs] and [`BPMs`][resdep.epicsBPMs]
 		"""
 		# --- BLMs 
 		self.blm = BLMs()
@@ -439,7 +535,7 @@ class ResonantDepolarisation():
 		self.ODB_PVs["X_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:X_SIZE_MONITOR", connect=True)
 		self.ODB_PVs["X_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:X_OFFSET_MONITOR", connect=True)
 		self.ODB_PVs["Y_size"] 		 = epics.pv.get_pv("SR10BM02IMG01:Y_SIZE_MONITOR", connect=True)
-		self.ODB_PVs["Y_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)\
+		self.ODB_PVs["Y_offset"] 	 = epics.pv.get_pv("SR10BM02IMG01:Y_OFFSET_MONITOR", connect=True)
 
 		# --- SR/LCW/RF temperatures
 		# initialise PV dicts
@@ -693,8 +789,8 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def fast_log_data(self, ) -> None:
 		"""
-		Appends PV values to python lists at fast_log_frequency Hz. \\
-		Stored in memory until save_data() is called.
+		Appends PV values to python lists at fast_log_frequency Hz. 
+		Stored in memory until [`save_data`][resdep.experiment.ResonantDepolarisation.save_data] is called.
 
 		Saved Values
 		------------
@@ -702,6 +798,7 @@ class ResonantDepolarisation():
 		- Kicker frequency
 		- Current
 		- timestamps
+		- BPM position and intensity
 		"""
 		try:
 			timestamp = datetime.datetime.now()
@@ -734,13 +831,12 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def slow_log_data(self, ) -> None:
 		"""
-		Appends PV values to python lists at slow_log_frequency Hz. \\
-		Stored in memory until save_data() is called.
+		Appends PV values to python lists at `slow_log_frequency` Hz.
+		Stored in memory until [`save_data`][resdep.experiment.ResonantDepolarisation.save_data] is called.
 
 		Saved Values
 		------------
 		- ODB size and offset
-		- Emittance monitors
 		- timestamps
 		"""
 		try:
@@ -757,13 +853,12 @@ class ResonantDepolarisation():
 		return None
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def calcf_revfromMasterRF(self, ) -> None:
-		"""
-		Calculate a more accurate (real-time) f_rev based off current Master RF  
+		"""Calculate a more accurate (real-time) revolution frequency (f_rev) based off current Master RF  
 		
-		## Updates attributes
-		
-		:attr:`f_rev`: *float*
-			revolution frequency
+		Attributes
+		----------
+		f_rev: float
+			Revolution frequency
 		"""
 		# Grab masterRF from EPICS
 		# if disconnected, .get() will return none and f_rev with throw exception
@@ -774,38 +869,51 @@ class ResonantDepolarisation():
 		return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def calculate_adc_counter_windows(self, sector: int = 1) -> None:
-		"""
-		Calculates the offsets and window lengths of the two counter windows for a specific sector \\
-		**Note**: this only works for one sector, since there is no way to make the ADC windows wrap around `T0`. \\
-		Thus, the 'half' of the beam that the ADC windows capture informs the bunches that should be depolarised by the BbB, \\
+		"""Calculates the offsets and window lengths of the two counter windows for a specific sector. 
+
+		Parameters
+		----------
+		sector: int, default=1
+		    The sector to align to, defaults to 1 which has the nicest reconstructed fill/loss pattern.
+	
+		Returns
+		-------
+		calculated_adc_counter_windows: list[int]
+			list containing counters 1 & 2 window and offset settings for the given sector.
+			Values are a list of `[offset_1, window_1, offset_2, window_2]`
+
+		depolarised_bunches: str
+			list containing the start:stop range of bunches to be depolarised using the BbB.
+			This is basically a conversion from the ADC cycles (window length and pos) to bunch number
+
+		Raises
+		------
+		TypeError
+			If PVs timeout and return `None`.
+
+		Notes
+		-----
+		This only works for one sector, since there is no way to make the ADC windows wrap around `T0`.
+		Thus, the 'half' of the beam that the ADC windows capture informs the bunches that should be depolarised by the BbB,
 		and said half is unlikely to line up with the bunch numbers (*i.e.* unlikely to be bunches 1--180). 
 		
 		Regardless of the shape / phase of the fill pattern seen by the BLM:
 		
-			┌───────────────┐    ┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-			│ ┌───────────┐ │    │─────────┐   ┌─│    │─┐   ┌─────────│    │─────┐   ┌─────│
-			│ │           │ │    │         │   │ │    │ │   │         │    │     │   │     │
-			│ │           │ │ OR │         │   │ │ OR │ │   │         │ OR │     │   │     │
-			│─┘           └─│    │         └───┘ │    │ └───┘         │    │     └───┘     │
-			└───────────────┘    └───────────────┘    └───────────────┘    └───────────────┘
+			+---------------+   +---------------+   +---------------+   +---------------+
+			| +-----------+ |   |--------+  +---|   |-+  +----------|   |------+  +-----|
+			| |           | |   |        |  |   |   | |  |          |   |      |  |     |
+			| |           | |   |        |  |   |   | |  |          |   |      |  |     |
+			|-+           +-|   |        +--+   |	| +--+          |   |      +--+     |
+			+---------------+   +---------------+   +---------------+   +---------------+
 
-		we can simply integrate the fill pattern from the left until we reach exactly half of the area under the curve \\
-		to split the beam into two *charge equivalent* halves. ADC windows can be calculated directly from the point which \\
+		we can simply integrate the fill pattern from the left until we reach exactly half of the area under the curve
+		to split the beam into two *charge equivalent* halves. ADC windows can be calculated directly from the point which
 		divides the beam into the charge eqivalent halves.
 		
-		From there, we can calculate the time / phase difference between the BLM and BbB system and calculate the bunches \\
-		to be depolarised. Alignment is done by finding the minima of the fill pattern seen by each system and shifting \\
+		From there, we can calculate the time / phase difference between the BLM and BbB system and calculate the bunches
+		to be depolarised. Alignment is done by finding the minima of the fill pattern seen by each system and shifting
 		the BbB by the difference between them.
 
-		Attributes
-		----------
-		[:attr:`set_adc_counter_offset_1`, ...] <- calculated_adc_counter_windows : list[int]
-			list containing counters 1 & 2 window and offset settings for the given sector \\
-			Values are a list of `[offset_1, window_1, offset_2, window_2]`
-
-		:attr:`set_drive_pattern` <- depolarised_bunches : str
-			list containing the start:stop range of bunches to be depolarised using the BbB \\
-			This is basically a conversion from the ADC cycles (window length and pos) to bunch number
 		"""
 		logging.info("Status: Time aligning BLM ADC windows and BbB system...")
 
@@ -909,13 +1017,13 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def find_middle_of_empty_buckets(self, fill_pattern: npt.NDArray[np.floating]) -> int:
 		"""
-		Calculates the middle of the empty buckets in the fill pattern \\
-		Used to align different fill pattern sources (BbB, BLMs) in time.
+		Calculates the middle of the empty buckets in the fill pattern.
+		Used in [`calculate_adc_counter_windows`][resdep.experiment.ResonantDepolarisation.calculate_adc_counter_windows].
 
 		Parameters
 		----------
 		fill_pattern: npt.NDArray[np.floating]
-			Fill pattern / bunch train of the electron beam
+		    Fill pattern / bunch train of the electron beam
 
 		Returns
 		-------
@@ -943,10 +1051,19 @@ class ResonantDepolarisation():
 	# --------------------------------------------------------------------------------------------------------------------
 	def save_data(self, ) -> None:
 		"""
-		Saves PV data to text, json and csv files depending on structure \\
-		Also append entime to metadata and saves to json. \\
-		Save path is Data/{YYYY-mm-dd}/{HHHHh}/ \\
-		*e.g.* Data/2025-10-20/0900h/
+		Saves PV data to text, json and csv files depending on structure.
+		Also append endtime to metadata and saves to json.
+
+		Notes
+		-----
+		Save path is `data_path/{YYYY}/{YYYY-mm-dd}/{HHHH}h`. 
+
+		`data_path` is either:
+
+		1. `usr/data/resdep` - on OPIs
+		2. `./data` - elsewhere
+
+		*e.g.* `usr/data/2025/2025-10-20/0900h`
 		"""
 
 		try:
@@ -1032,9 +1149,13 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------	
 	def plot_data(self, ) -> None:
 		"""
-		Plots loss ratio between polarised and depolarised bunches. \\
-		Fits error function to sectors with compatible timing with BbB / FPM. \\
-		Also plots ODB beam size and offset to check for any major disturbances.
+		Plots loss ratio between polarised and depolarised bunches. 
+		Fits error function to sectors with compatible timing with BbB / FPM. 
+
+		Warning
+		-------
+		Only called when running [`start_experiment`][resdep.experiment.ResonantDepolarisation.start_experiment] 
+		from the command line. If running from a GUI, this function is ignored. 
 		"""
 
 		try:
@@ -1090,7 +1211,7 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def request_abort(self, ) -> None:
 		"""
-		Changes the abort state to True, which will interrupt the experiment loop on the next iteration
+		Changes the abort state to `True`, which will interrupt the experiment loop on the next iteration.
 		"""
 		self._abort_requested = True
 		return None
@@ -1100,7 +1221,12 @@ class ResonantDepolarisation():
 	# ----------------------------------------------------------------------------------------------------------------------------------------------------
 	def interruptible_sleep(self, seconds: int) -> None:
 		"""
-		Sleeps over long periods of time, waking often to check states (abort for example)
+		Sleeps over long periods of time, waking often to check states (for example: `abort`).
+
+		Parameters
+		----------
+		seconds: int
+			Time to sleep in seconds
 		"""
 		end = time.time() + seconds
 		while time.time() < end:
@@ -1118,37 +1244,60 @@ class ResonantDepolarisation():
 @dataclass
 class ProcessedData():
 	"""
-	Class for storing processed/analysed/formatted data generated by resdep and associated _fitting and _plotting helper classes
+	Class for storing processed data generated by [`resdep`][resdep.experiment.ResonantDepolarisation] and associated [`_fitting`][resdep._fitting] and [`_plotting`][resdep._plotting] helper classes
 
-	## Key attributes
 
-	:attr:`freqs_array`: *npt.NDArray[np.floating]*
-		numpy array of the set frequencies during the experiment sweep \\
-		often x-axis in plots and fitting.]
-	:attr:`ratio_loss`: *dict[str, npt.NDArray[np.floating]]*
-		Ratio of the beam loss between the two ADC windows on the beam loss monitors. \\
-		keys of the form `"{sector}{section}"`, e.g. `"4A"`
+	Attributes
+	----------
+	freqs_array: npt.NDArray[np.floating]
+		numpy array of the set frequencies during the experiment sweep.
+		Often x-axis in plots and fitting.
+	ratio_loss: dict[str, npt.NDArray[np.floating]]
+		Ratio of the beam loss between the two ADC windows on the beam loss monitors. 
+		Keys of the form `"{sector}{section}"`, e.g. `"4A"`
+	mask: Union[npt.NDArray[np.bool_], "builtins.ellipsis"]
+		Binary mask, used to constrain the fit to a certain frequency range.
+		Value assigned in [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit], and
+		[`calculate_fitting_mask`][resdep._plotting.PlottingClass.calculate_fitting_mask].
+	y_model: dict[str, npt.NDArray[np.float64]]
+		y-axis data generated by the cumulative distribution function fit.
+		See [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions].
+	fitted_beam_energies: dict[str, float]
+		The mean beam energy extracted from the fit to the loss on each sector.
+		See [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions].
+	fitted_beam_energy_stddevs: dict[str, float]
+		The standard deviations of the above values.
+	E0_mean: Union[float, None]
+		Mean beam energy, derived from the average of the fits over all sectors.
+		See [`calculate_fitted_energy_stats`][resdep._fitting.FittingClass.calculate_fitted_energy_stats].
+	E0_stddev: Union[float, None]
+		Two standard deviations of the above value.
+	E0_mean_sigfig, E0_stddev_sigfig: Union[float, None]
+		The above two values formatted, so that the error is quoted to only one significant figure,
+		and the mean energy is quoted only to the number of significant figures as the error allows.
 
-	## member functions
-
-	:meth:`calculate_ratio_loss`
-		Calculates the ratio of the beam loss between the two ADC windows on the beam loss monitors
+	Note
+	----
+	This Class is passed by reference when instancing the helper classes 
+	[fitting][resdep._fitting.FittingClass] and [plotting][resdep._plotting.PlottingClass].
+	This is to pass the data between the different modules without having to configure each helper function
+	to take in and return *many* args.
 
 	"""
 	resdep 			: "ResonantDepolarisation"
 	sectors_to_fit	: list[str]
 	# defaults (if data is not passed on initialisation/instancing)
-	freqs_array	: npt.NDArray[np.floating] 							= field(default=np.array([]))
-	ratio_loss	: dict[str, npt.NDArray[np.floating]] 				= field(default_factory=dict)
+	freqs_array	: npt.NDArray[np.floating] 								= field(default=np.array([]))
+	ratio_loss	: dict[str, npt.NDArray[np.floating]] 					= field(default_factory=dict)
 	# plotting
 	mask		: Union[npt.NDArray[np.bool_], "builtins.ellipsis"] 	= field(default=...) 
 	# fitting
-	y_model                       : dict[str, npt.NDArray[np.float64]] = field(default_factory=dict)
-	fitted_beam_energy_frequencies: dict[str, float]                   = field(default_factory=dict)
-	fitted_beam_energies          : dict[str, float]                   = field(default_factory=dict)
-	fitted_beam_energy_stddevs    : dict[str, float]                   = field(default_factory=dict)
-	fit_results                   : str                                = field(default="")
-	_poor_fit                  	  : dict[str, bool]                    = field(default_factory=dict)
+	y_model                       : dict[str, npt.NDArray[np.float64]] 	= field(default_factory=dict)
+	fitted_beam_energy_frequencies: dict[str, float]                   	= field(default_factory=dict)
+	fitted_beam_energies          : dict[str, float]                   	= field(default_factory=dict)
+	fitted_beam_energy_stddevs    : dict[str, float]                   	= field(default_factory=dict)
+	fit_results                   : str                                	= field(default="")
+	_poor_fit                  	  : dict[str, bool]                    	= field(default_factory=dict)
 	# stats
 	E0_mean         : Union[float, None] = field(default=None)
 	E0_stddev       : Union[float, None] = field(default=None)
@@ -1160,13 +1309,13 @@ class ProcessedData():
 		"""
 		Calculates the ratio of the beam loss between the two ADC windows on the beam loss monitors
 
-		## Updates attributes:
-
-		:attr:`freqs_array`: *npt.NDArray[np.floating]*
-			numpy array of the set frequencies during the experiment sweep \\
+		Attributes
+		----------
+		freqs_array: npt.NDArray[np.floating]
+			numpy array of the set frequencies during the experiment sweep.
 			often x-axis in plots and fitting.
-		:attr:`ratio_loss`: *dict[str, npt.NDArray[np.floating]]*
-			Ratio of the beam loss between the two ADC windows on the beam loss monitors. \\
+		ratio_loss: dict[str, npt.NDArray[np.floating]]
+			Ratio of the beam loss between the two ADC windows on the beam loss monitors.
 			keys of the form `"{sector}{section}"`, e.g. `"4A"`
 
 		"""

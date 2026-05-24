@@ -2,7 +2,10 @@
 """
 Handles and exports data from the PV archiver appliance
 
-Stolen mostly from pytrendGUI.chanarc_export by Paul Bennetto. Simpler version for just accessing a few known (reliable) PVs.
+Info
+----
+Adapted from [`pytrendGUI.chanarc_export`](https://bitbucket.synchrotron.org.au/projects/ACC/repos/pytrendgui/browse/chanarc_export.py) 
+by Paul Bennetto. Simpler version for just accessing a few known (reliable) PVs.
 """
 """
  █████╗ ██████╗  ██████╗██╗  ██╗██╗██╗   ██╗███████╗██████╗ 
@@ -22,7 +25,7 @@ def check_for_recent_beam_injection() -> bool:
     Returns
     -------
     verdict: bool
-        If beam has been injected recently, returns `True`. \\
+        If beam has been injected recently, returns `True`. 
         If we've held > 150 mA for the last 39 minutes, return `False`.
     """
     verdict = False

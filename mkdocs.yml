@@ -1,0 +1,135 @@
+site_name: Resonant depolarisation docs
+site_url: https://liamjwatson.github.io/resdep
+repo_name: resdep
+repo_url: https://bitbucket.synchrotron.org.au/scm/acc/resdep.git
+theme:
+  name: material
+
+  font: false
+
+  icon:
+    repo: fontawesome/brands/bitbucket
+
+  features:
+    # - navigation.instant
+    - navigation.tabs
+    # - navigation.sections
+    - navigation.path
+    - navigation.indexes
+    - toc.follow
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+    # code blocks
+    - content.code.copy
+    - content.code.select
+
+  palette: 
+    # Palette toggle for dark mode
+    - scheme: slate
+      # primary: custom
+      # accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - scheme: default
+      toggle:
+        icon: material/brightness-7 
+        name: Switch to dark mode
+
+plugins:
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          inventories:
+          - https://docs.python.org/3/objects.inv
+          - https://numpy.org/doc/stable/objects.inv
+          - https://scipy.github.io/devdocs/objects.inv
+          options:  
+            # General docstrings
+            docstring_style: numpy
+            docstring_section_style: list
+            # cross refs
+            relative_crossrefs: true
+            scoped_crossrefs: true
+            signature_crossrefs: true
+            # Members (what each object / module includes)
+            summary: true
+            # Headings / paths 
+            heading_level: 1
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            # TOC
+            show_symbol_type_toc: true
+            # funciton Signatures / typesW
+            separate_signature: true
+            line_length: 80
+            modernize_annotations: true
+            show_signature_annotations: true
+            show_signature_type_parameters: true
+            unwrap_annotated: true
+            show_overloads: false
+            # general
+            backlinks: tree
+  - search
+  # - privacy
+  # - offline:
+  #     enabled: true
+    # enabled: !ENV [OFFLINE, false]
+
+nav:
+  - Home: index.md
+  - Getting started: getting_started.md
+  - User guide:
+    - user_guide/index.md
+    - Kubili: user_guide/kubili.md
+    - simpleGUI: user_guide/simpleGUI.md
+    - resdepGUI: user_guide/resdepGUI.md
+  - Physics: physics.md
+  - Code base:
+    - code_base/index.md
+    - Workflow:
+      - code_base/workflow/index.md
+      - Check machine state: code_base/workflow/check_machine_state.md
+      - Experiment startup: code_base/workflow/experiment_startup.md
+      - Experiment: code_base/workflow/experiment.md
+      - Saving data: code_base/workflow/save_data.md
+    - Resonant Depolarisation: code_base/resdep.md
+    - GUIs:
+      - code_base/GUIs/index.md
+      - simpleGUI (Routine): code_base/GUIs/simpleGUI.md
+      - resdepGUI (Machine studies): code_base/GUIs/resdepGUI.md
+    - Helper classes: 
+      - code_base/helper_classes/index.md
+      - Archiver: code_base/helper_classes/_archiver.md
+      - Calculations: code_base/helper_classes/_calculations.md
+      - Fitting: code_base/helper_classes/_fitting.md
+      - Plotting: code_base/helper_classes/_plotting.md
+    - Extensible classes:
+      - code_base/extensible_classes/index.md
+      - Beam position monitors: code_base/extensible_classes/epicsBPMs.md
+      - Beam loss monitors: code_base/extensible_classes/epicsBLMs.md
+  - Contributing: CONTRIBUTING.md
+
+markdown_extensions:
+- admonition
+- pymdownx.details
+- toc:
+    permalink: true
+- pymdownx.arithmatex:
+    generic: true
+- pymdownx.superfences:
+    custom_fences:
+      - name: mermaid
+        class: mermaid
+        format: !!python/name:pymdownx.superfences.fence_code_format
+- pymdownx.tabbed:
+    alternate_style: true
+
+extra_css:
+  - stylesheets/extra.css
