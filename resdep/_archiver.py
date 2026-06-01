@@ -15,6 +15,7 @@ by Paul Bennetto. Simpler version for just accessing a few known (reliable) PVs.
 ██║  ██║██║  ██║╚██████╗██║  ██║██║ ╚████╔╝ ███████╗██║  ██║
 ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
 """
+from typing import Any, Union
 import datetime
 import requests
 
@@ -31,30 +32,30 @@ def check_for_recent_beam_injection() -> bool:
     verdict = False
 
     # archiver time request must be in iso and utc format
-    utc_offset          = datetime.datetime.now() - datetime.datetime.utcnow()
-    utc_offset_seconds  = round(utc_offset.total_seconds())
-    utc_offset          = datetime.timedelta(seconds=utc_offset_seconds)
+    now             : datetime.datetime = datetime.datetime.now()
+    utc_offset      : Union[datetime.timedelta, None] = now.astimezone().utcoffset()
+    if utc_offset is None:
+        raise TypeError("Could not detect system timezone. Required for utc formatted requests to PV archiver appliance.")
 
-    archiver_affix  : str = "cr01arc04:17668/retrieval/data"
-    pvname          : str = "SR11BCM01:CURRENT_MONITOR"
-    start_time      : datetime.datetime = datetime.datetime.now() - datetime.timedelta(minutes=39) - utc_offset
-    end_time        : datetime.datetime = datetime.datetime.now() - utc_offset
+    archiver_affix  : str               = "cr01arc04:17668/retrieval/data"
+    pvname          : str               = "SR11BCM01:CURRENT_MONITOR"
+    start_time      : datetime.datetime = now - datetime.timedelta(minutes=39) - utc_offset
+    end_time        : datetime.datetime = now - utc_offset
 
-    start_time_iso  : str = start_time.isoformat()
-    end_time_iso    : str = end_time.isoformat()
+    start_time_iso  : str               = start_time.isoformat()
+    end_time_iso    : str               = end_time.isoformat()
 
-    request: str = f"http://{archiver_affix}/getData.json?pv={pvname}&from={start_time_iso}Z&to={end_time_iso}Z"
-    response = requests.get(request)
-    data = response.json()[0]["data"]
+    request : str                       = f"http://{archiver_affix}/getData.json?pv={pvname}&from={start_time_iso}Z&to={end_time_iso}Z"
+    response: requests.models.Response  = requests.get(request)
+    data    : list[dict[str, Any]]      = response.json()[0]["data"]
 
-    current: list[float] = []
+    current : list[float] = []
     for index in range(len(data)):
         current.append(data[index]["val"])
 
     # find less than 150
-    current_less_than_150mA = [I < 150 for I in current]
+    current_less_than_150mA: list[bool] = [i < 150 for i in current]  # noqa: E741
     if any(current_less_than_150mA):
-        # warnings.warn("Beam has been injected too recently and has not have enought time to polarise.")
         verdict = True
 
     return verdict

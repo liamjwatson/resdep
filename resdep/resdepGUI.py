@@ -102,8 +102,7 @@ class MainWindow(QWidget):
         self.resdepQt.finished.connect(self.on_finish)
 
         # helper classes
-        sectors_to_fit = ["1", "4", "8", "11", "12", "13"]
-        self.processed_data = ProcessedData(resdep=self.resdep, sectors_to_fit=sectors_to_fit)
+        self.processed_data = ProcessedData(resdep=self.resdep)
         self.fitting        = FittingClass(resdep=self.resdep, processed_data=self.processed_data)
         # ... self.plotting initialised in _init_plot_pane() due to plot canvas attribute
 
@@ -154,6 +153,11 @@ class MainWindow(QWidget):
         main_window_layout.addWidget(self.MX3_pane)
         main_window_layout.addWidget(self.button_pane)
         main_window_layout.addWidget(self.status_bar)
+
+        # calculate range and draw plot
+        self.update_expected_resonances()
+
+        self.config_logger()
 
         # read previous settings (if they exist)
         self.read_GUI_settings()
@@ -213,6 +217,7 @@ class MainWindow(QWidget):
         self.MX3_pane.setLayout(self.MX3_layout)
         self.MX3_layout.addStretch()
         self.checkbox_measure_MX3 = QCheckBox("Measure MX3?")
+        self.checkbox_measure_MX3.setChecked(False)
         self.MX3_layout.addWidget(self.checkbox_measure_MX3)
 
         # add settings widgets to a dict for loops (enabling/disabling)
@@ -337,7 +342,17 @@ class MainWindow(QWidget):
         # data directory button
         self.button_data_path = QPushButton("Data path")
         self.button_data_path.setIcon(dir_icon)
+        
+        # temporary data path
         self.data_path = Path.cwd()
+        hostname = platform.node()
+        try:
+            hostname.index("OPI")
+            self.data_path = Path("/asp/usr/data/resdep")
+        except ValueError: # not running on AS OPI
+            Path.mkdir(self.data_path/"GUI_log", exist_ok=True) # does not wipe the dir if it exists, just continues
+            pass
+        self.logfile_path = Path(self.data_path/"GUI_log")
 
         # load finished experiment data button
         self.button_finished_experiment_data = QPushButton("Load finished experiment data")
@@ -382,9 +397,6 @@ class MainWindow(QWidget):
 
         # Create canvas
         self.graph = GUIGraph(self)
-        self.plotting = PlottingClass(resdep=self.resdep, processed_data=self.processed_data, graph=self.graph)
-        # calculate range and draw plot
-        self.update_expected_resonances()
         # Create toolbar, passing canvas as first parament, parent (self, the MainWindow) as second.
         plot_toolbar = NavigationToolbar(self.graph, self)
         # add plot to pane
@@ -392,9 +404,41 @@ class MainWindow(QWidget):
         plot_layout.addWidget(self.graph)
         # Add to top layout. Is horizontal box, so adds right
         self.top_layout.addWidget(plot_pane)
+        
+        # pass to _plotting
+        self.plotting = PlottingClass(resdep=self.resdep, processed_data=self.processed_data, graph=self.graph)
 
         return None
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def config_logger(self, ) -> None:
+        """Configure the logger to write to console and logfile
+        """
+        self.start_time = datetime.datetime.now()
+        date_str 		= self.start_time.strftime("%Y-%m-%d")
+        hours_str 		= self.start_time.strftime("%H%Mh")
+        seconds_str 	= self.start_time.strftime("%Ss")
+        filename: str   = f"logfile_{date_str}_{hours_str}-{seconds_str}.log"
 
+        logger_format = "%(asctime)s - %(levelname)s - %(message)s"
+        file_logger = logging.getLogger("")
+        logging.basicConfig(level=logging.DEBUG,
+                            format=logger_format,
+                            filename=self.logfile_path / filename,
+                            filemode='w')
+        # Until here logs only to file: 'logfile'
+        # define a new Handler to log to console as well
+        console_logger = logging.StreamHandler()
+        # optional, set the logging level
+        console_logger.setLevel(logging.INFO)
+        # set a format which is the same for console use
+        formatter = logging.Formatter(logger_format)
+        # tell the handler to use this format
+        console_logger.setFormatter(formatter)
+        # add the handler to the root logger
+        file_logger.addHandler(console_logger)
+
+        logging.debug(self.start_time)
+        logging.debug("--- resdepGUI starting up ---")
     # *--------------------------------* #
 	# *---------- Experiment ----------* #
 	# *--------------------------------* # 
@@ -455,31 +499,12 @@ class MainWindow(QWidget):
     def on_data_path_update(self, data_path: Path) -> None:
         """
         Assign data path from resdep to GUI button 
-        Spawn error logger
         """
         self.data_path = data_path
         self.button_data_path.setEnabled(True)
 
         # update canvas save directory
         rcParams["savefig.directory"] = data_path
-
-        # --- logging to console and file
-        # Create a logger
-        self.logger = logging.getLogger('resdep_logger')
-        self.logger.setLevel(logging.DEBUG)
-        # Create a formatter to define the log format
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        # Create a file handler to write logs to a file
-        file_handler = logging.FileHandler(data_path / "logfile.log")
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(formatter)
-        # Create a stream handler to print logs to the console
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)  # You can set the desired log level for console output
-        console_handler.setFormatter(formatter)
-        # Add the handlers to the logger
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
         
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -811,6 +836,7 @@ class MainWindow(QWidget):
 
         checked_sector_checkboxes = cast(list[bool], [sector_checkbox.isChecked() for sector_checkbox in self.sector_checkboxes])
         self.sectors_to_fit = [_sector for _sector, checked in zip(self.sectors, checked_sector_checkboxes) if checked]
+        self.processed_data.sectors_to_fit = self.sectors_to_fit
 
         # warn if no sectors selected and exit early
         if not any(checked_sector_checkboxes):
@@ -833,17 +859,17 @@ class MainWindow(QWidget):
                 return None
 
             if len(self.sectors_to_fit) > 1: # calc stddev of means if multiple fits
-                _, _, E0_mean_sigfig, E0_stddev_sigfig = self.fitting.calculate_fitted_energy_stats() 
+                self.fitting.calculate_fitted_energy_stats() 
             else: # use stddev of fit if only one fit
-                _, _, E0_mean_sigfig, E0_stddev_sigfig = self.fitting.calculate_fitted_energy_stats() 
+                self.fitting.calculate_fitted_energy_stats() 
 
             self.plotting.plot_fits()
             
-            fitted_beam_energy_str = f"{E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stddev_sigfig*1e6:.0f} keV"
-            print(f"mean E0 = {fitted_beam_energy_str}")
+            
+            print(f"mean E0 = {self.processed_data.fitted_beam_energy_str}")
             print("Fit results:\n", fit_results)
             # update GUI
-            self.fitted_beam_energy_label.setText(fitted_beam_energy_str)
+            self.fitted_beam_energy_label.setText(self.processed_data.fitted_beam_energy_str)
             self.fit_results_label.setText(fit_results)
         
         finally:
@@ -912,7 +938,7 @@ class MainWindow(QWidget):
         Interrupts resdep experiment loop.
         """
 
-        print("Abort!")
+        logging.critical("Abort!")
 
         # Disable abort button
         self.button_abort.setEnabled(False)
@@ -969,6 +995,10 @@ class MainWindow(QWidget):
         Shutdown tasks for GUI \\
         For now, just save used input parameters
         """
+
+        logging.debug("--- resdepGUI shutting down ---")
+        shutdown_time = datetime.datetime.now()
+        logging.debug(shutdown_time)
 
         answer = QMessageBox.question(
             self,

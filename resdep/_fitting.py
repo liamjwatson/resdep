@@ -10,7 +10,8 @@ Helper class for resdep related to fitting cumulative distribution (cdf) curves 
 ╚═╝     ╚═╝   ╚═╝      ╚═╝   ╚═╝╚═╝  ╚═══╝ ╚═════╝ 
 """
 from typing import TYPE_CHECKING, Union
-import logging, traceback
+import logging
+import traceback
 import builtins
 import numpy as np
 import numpy.typing as npt
@@ -102,7 +103,7 @@ class FittingClass():
         fitted_beam_energy_stddevs      : dict[str, float]                      = {}
         fit_results                     : str                                   = ""        
         mask = self.processed_data.mask
-        if step_location == None:
+        if step_location is None:
             step_location = self.resdep.res_freq
         freqs = self.processed_data.freqs_array[mask]
 
@@ -178,7 +179,7 @@ class FittingClass():
 
         return y_model, fitted_beam_energies, fitted_beam_energy_stddevs, fit_results
     # ------------------------------------------------------------------------------------------------------
-    def calculate_fitted_energy_stats(self, ) -> tuple[float, ...]:
+    def calculate_fitted_energy_stats(self, ) -> tuple[float, float, float, float, str]:
         """
         Calculate the mean and standard deviation of the fitted energies for all the selected sectors. 
 
@@ -187,11 +188,14 @@ class FittingClass():
         E0_mean: float
             Mean energy
         E0_stddev: float
-            Standard devation of mean energy
+            Two standard devations of mean energy
         E0_mean_sigfig: float
             Mean energy quoted to the number of significant figures as the standard deviation allows
         E0_stddev_sigfig: float
-            Standard deviation of the mean energy to one significant figure
+            Two standard deviations of the mean energy to one significant figure
+        fitted_beam_energy_str: str
+            Mean energy plus minus two standard deviations, all quoted to the appropirate number of sigfigs, 
+            as a formatted str. Example: 3.030287 GeV \u00B1 7 keV
 
         Tip
         --- 
@@ -212,13 +216,16 @@ class FittingClass():
         
         E0_stddev_sigfig: float = round_to_1_sigfig(E0_stddev)
         E0_mean_sigfig  : float = round_to_error_sigfig(E0_mean, E0_stddev_sigfig)
+        fitted_beam_energy_str = f"{E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stddev_sigfig*1e6:.0f} keV"
 
-        self.processed_data.E0_mean             = E0_mean
-        self.processed_data.E0_stddev           = E0_stddev
-        self.processed_data.E0_mean_sigfig      = E0_mean_sigfig
-        self.processed_data.E0_stddev_sigfig    = E0_stddev_sigfig
+        self.processed_data.E0_mean                 = E0_mean
+        self.processed_data.E0_stddev               = E0_stddev
+        self.processed_data.E0_mean_sigfig          = E0_mean_sigfig
+        self.processed_data.E0_stddev_sigfig        = E0_stddev_sigfig
+        self.processed_data.fitted_beam_energy_str  = fitted_beam_energy_str
+
                 
-        return E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig
+        return E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig, fitted_beam_energy_str
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def find_step_change_in_beam_loss(self, ) -> np.floating:
         """Determines step loss from the fact that the derivative of a cdf is a gauss. 
@@ -241,21 +248,25 @@ class FittingClass():
         - Derivative of error function / cdf is a gauss. Gauss peak should be middle of step in original loss data.
         """
         steps: list[float] = []
+        x = self.processed_data.freqs_array
         for sector in self.processed_data.sectors_to_fit:
-            key = f"{sector}B"
-            x = self.processed_data.freqs_array
-            y = np.copy(self.processed_data.ratio_loss[key])
-            # set 0 
-            y += -np.mean(y[:100]) 
-            # normalise
-            y *= 1/np.max(y)
-            # smooth into oblivion
-            y = gaussian_filter1d(input=y, sigma=1000*10//5) # n * 10 datapoints/sec / 5Hz/s scan
-            # differentiate
-            dy = np.gradient(y)
-            # peak in gradient data --> step position in raw data
-            step = x[np.argmax(dy)]
-            steps.append(step)
+            try:
+                key = f"{sector}B"
+                y = np.copy(self.processed_data.ratio_loss[key])
+                # set 0 
+                y += -np.mean(y[:100]) 
+                # normalise
+                y *= 1/np.max(y)
+                # smooth into oblivion
+                y = gaussian_filter1d(input=y, sigma=1000*10//5) # n * 10 datapoints/sec / 5Hz/s scan
+                # differentiate
+                dy = np.gradient(y)
+                # peak in gradient data --> step position in raw data
+                step = x[np.argmax(dy)]
+                steps.append(step)
+            except KeyError: # if blm is OOS
+                pass # continue loop
+        
 
         steps_mean      : np.floating   = np.mean(steps)
         steps_variance  : np.floating   = np.var(steps)
@@ -315,9 +326,8 @@ class FittingClass():
             if all(self.processed_data._poor_fit.values()):
                 raise FittingError("All fits were poor (too much variance). Intervention required.Is everything okay with the machine?")
             
-            E0_mean, _, E0_mean_sigfig, E0_stddev_sigfig = self.calculate_fitted_energy_stats()
+            E0_mean, _, E0_mean_sigfig, _, fitted_beam_energy_str = self.calculate_fitted_energy_stats()
 
-            fitted_beam_energy_str = f"{E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stddev_sigfig*1e6:.0f} keV"
             logging.info(f"Mean beam energy = {fitted_beam_energy_str}")
  
         return E0_mean, E0_mean_sigfig, fitted_beam_energy_str, error

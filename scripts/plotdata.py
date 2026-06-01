@@ -11,8 +11,6 @@ Plot resdep data
 ╚═╝     ╚══════╝ ╚═════╝    ╚═╝       ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
 """
 
-from functools import partial
-from typing import Any
 from datetime import datetime
 import time
 import json
@@ -22,19 +20,12 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from cycler import cycler
 import os
 from pathlib import Path
-from scipy.ndimage import gaussian_filter1d
-from scipy.signal import savgol_filter
-
-# fitting
-from scipy import optimize
-# from sklearn.metrics import r2_score
 
 # resdep modules
 from resdep.epicsBPMs import SR_BPMs, MX3_BPMs, TBPMs
 from resdep._plotting import PlottingClass, StandaloneGraph
 from resdep._fitting import FittingClass
 from resdep.experiment import ResonantDepolarisation, ProcessedData
-from resdep._calculations import energy_calc, freq_calc
 
 # --- consts
 f_rev 		= 1.38799e3 			# kHz
@@ -49,7 +40,7 @@ mu: str 	= u"\u03bc"
 # --- import data
 
 data_path = Path("Z:/usr/data/resdep")
-data_path = data_path / "2026" / "2026-02-22" / "1101h"
+data_path = data_path / "2026" / "2026-05-24" / "1038h"
 print(f"folder={data_path.name}")
 if not data_path.exists():
 	raise FileNotFoundError("Incorrect path")
@@ -97,9 +88,9 @@ with open(os.path.join(data_path, 'adc_counter_loss_1.json'), 'r') as f:
 with open(os.path.join(data_path, 'adc_counter_loss_2.json'), 'r') as f:
 	beam_loss_window_2 = json.load(f)
 
-# ODB beam size and offset
-with open(os.path.join(data_path, "ODB_data.json"), "r") as f:
-	ODB_data = json.load(f)
+# # ODB beam size and offset
+# with open(os.path.join(data_path, "ODB_data.json"), "r") as f:
+# 	ODB_data = json.load(f)
 
 # Assign metadata to variables:
 if "f_rev" in metadata.keys():
@@ -122,8 +113,7 @@ resdep.tune = tune
 resdep.harmonic = harmonic
 resdep.res_freq = res_freq
 
-sectors_to_fit = ["1", "4", "8", "11", "12", "13"]
-processed_data = ProcessedData(resdep=resdep, sectors_to_fit=sectors_to_fit)
+processed_data = ProcessedData(resdep=resdep)
 processed_data.calculate_ratio_loss(sigma=200, bin=True)
 
 graph = StandaloneGraph()
@@ -889,6 +879,7 @@ if __name__ == "__main__":
 	plt.ion()
 	plotting.plot_ratio_loss()
 	graph.figure.show()
+	input("continue?")
 	time.sleep(1)
 	graph.axes.clear()
 	fitting.automagic_fit()

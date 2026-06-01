@@ -100,11 +100,13 @@ class BPMs(ABC):
         self.x_position_PVs: dict[str, Any]
         self.y_position_PVs: dict[str, Any]
         self.intensity_PVs : dict[str, Any]
+        self._pv_dicts      : list[dict[str, Any]]
 
         # --- data
-        self.x_position: dict[str, list[float]]
-        self.y_position: dict[str, list[float]]
-        self.intensity : dict[str, list[float]]
+        self.x_position : dict[str, list[float]]
+        self.y_position : dict[str, list[float]]
+        self.intensity  : dict[str, list[float]]
+        self._value_dicts: list[dict[str, list[float]]]
 
         # --- position units for each EPICS readback
         # (different bpms have different EPICS engineering units)
@@ -114,6 +116,10 @@ class BPMs(ABC):
         # drift space between bpms
         # keys: `bpm1|bpm2`. See your invoked instance for `bpm` naming scheme.
         self.bpm_separations: Union[dict[str, float], None] = None
+
+        # All PVs disconnected flag for handling `record_data()` etc.
+        self.disconnected_bpms: list[str] = []
+        self.all_disconnected: bool = False
 
         return None
     # -----------------------------------------------------------------------------------------------------------------------
@@ -125,17 +131,17 @@ class BPMs(ABC):
         cls.connect = cls._connect_decorator(cls.connect)
     # -----------------------------------------------------------------------------------------------------------------------
     @abstractmethod
-    def connect(self, ): ...
+    def connect(self,): ...
     # -----------------------------------------------------------------------------------------------------------------------
     @staticmethod
     def _connect_decorator(function: Callable):
         """
         Decorates connect with a state check. Only want to grab PVs once. Populates PV and storage dicts with keys.
         """
-        def wrapper(self, *args, **kwargs):
+        def wrapper(self:BPMs, *args, **kwargs):
 
             # check if PVs have loaded
-            if all(hasattr(self, attr) for attr in ["x_position_PVs", "y_position_PVs", "intensity_PVs"]):
+            if all([hasattr(self, attr) for attr in ["x_position_PVs", "y_position_PVs", "intensity_PVs"]]):
                 logging.warning("Request to connect, but BPM PVs already loaded!")
                 return None
 
@@ -143,19 +149,37 @@ class BPMs(ABC):
             self.x_position_PVs = {}
             self.y_position_PVs = {}
             self.intensity_PVs  = {}
+            self._pv_dicts      = [self.x_position_PVs, self.y_position_PVs, self.intensity_PVs]
            
             # run connect
             function(self, *args, **kwargs)
+
+            # exit early if all BPMs are disconnected
+            bpms_connected: list[bool] = [pv.connected for pv in self.x_position_PVs.values()]
+            if not any(bpms_connected):
+                self.all_disconnected = True
+                raise ConnectionRefusedError(f"All {self.__class__.__name__} PVs disconnected")
+
+            # remove "not connected" PVs from dictionaries, so that they are not called in `.get()` or `.calculate...` funcitons
+            # `connect()` should already warn "couldn't connect" to console
+            for dictionary in self._pv_dicts:
+                temp_dict = dictionary.copy()
+                for bpm, pv in dictionary.items():
+                    if not pv.connected:
+                        del temp_dict[bpm]
+                        self.disconnected_bpms.append(bpm)
+                dictionary = temp_dict # don't need `.copy()` here since temp_dict pointer is reassigned in next loop iteration
 
             # --- data
             self.x_position     = {}
             self.y_position     = {}
             self.intensity      = {}
+            self._value_dicts   = [self.x_position, self.y_position, self.intensity]
 
-            for key in self.x_position_PVs:
-                self.x_position[key] = []
-                self.y_position[key] = []
-                self.intensity[key]  = []
+            for bpm in self.x_position_PVs:
+                self.x_position[bpm] = []
+                self.y_position[bpm] = []
+                self.intensity[bpm]  = []
         
         return wrapper
     # -----------------------------------------------------------------------------------------------------------------------
@@ -201,6 +225,10 @@ class BPMs(ABC):
 
         logging.info(f"Calculating pitch and yaw. Input units: {self.position_unit} ({self.position_unit_scale})")
 
+        # check that x and y position dicts are the same length
+        if len(self.x_position) != len(self.y_position):
+            logging.warning("Storage dictionaries for x and y have a different number of keys. Be careful comparing data.")
+
         # generate position dict keys
         bpms = list(self.x_position.keys())
 
@@ -238,15 +266,16 @@ class BPMs(ABC):
         """
         Updates dictionary attributes (pos, intensity) with values from `epics.PV.get()`.
         """
+        if self.all_disconnected: # do nothing
+            return None
+        
+        if len(self.x_position_PVs) == 0:
+            raise ValueError("No PVs connected. Call connect() before .record_data()")
 
-        for bpm in self.x_position_PVs:
-            x_pos       = self.x_position_PVs[bpm].get()
-            y_pos       = self.y_position_PVs[bpm].get()
-            intensity   = self.intensity_PVs[bpm].get()
-
-            self.x_position[bpm].append(x_pos)
-            self.y_position[bpm].append(y_pos)
-            self.intensity[bpm].append(intensity)
+        for value_dict, pv_dict in zip(self._value_dicts, self._pv_dicts):
+            for bpm, pv in pv_dict.items():
+                value = pv.get(timeout=0.1)
+                value_dict[bpm].append(value)
 
         return None
     # -----------------------------------------------------------------------------------------------------------------------
@@ -259,6 +288,10 @@ class BPMs(ABC):
         path: Path
             Path to save folder
         """
+
+        if self.all_disconnected:
+            logging.warning("PVs not connected/disconnected. No objects to save.")
+            return None
 
         if path is None:
             path = Path.cwd() / "BPMs"
@@ -395,9 +428,9 @@ class SR_BPMs(BPMs):
 
         for sector in range(1, 14+1, 1):
             for bpm in range(1, 7+1, 1):
-                self.x_position_PVs[f"{sector}:{bpm}"] = epics.pv.get_pv(f"SR{sector:02d}BPM{bpm:02d}:SA_X_MONITOR", connect=True)
-                self.y_position_PVs[f"{sector}:{bpm}"] = epics.pv.get_pv(f"SR{sector:02d}BPM{bpm:02d}:SA_Y_MONITOR", connect=True)
-                self.intensity_PVs[f"{sector}:{bpm}"]  = epics.pv.get_pv(f"SR{sector:02d}BPM{bpm:02d}:SA_SUM_MONITOR", connect=True)
+                self.x_position_PVs[f"{sector}:{bpm}"] = epics.pv.get_pv(f"SR{sector:02d}BPM{bpm:02d}:SA_X_MONITOR", connect=True, timeout=0.1)
+                self.y_position_PVs[f"{sector}:{bpm}"] = epics.pv.get_pv(f"SR{sector:02d}BPM{bpm:02d}:SA_Y_MONITOR", connect=True, timeout=0.1)
+                self.intensity_PVs[f"{sector}:{bpm}"]  = epics.pv.get_pv(f"SR{sector:02d}BPM{bpm:02d}:SA_SUM_MONITOR", connect=True, timeout=0.1)
 
         return None
 
@@ -447,13 +480,13 @@ class MX3_BPMs(BPMs):
 
         for bpm in [1, 2, 5, 3, 4]:
             if bpm % 2 == 0: # is even
-                self.x_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"MX3BPM{bpm:02d}DAQ01:PosX:MeanValue_RBV", connect=True)
-                self.y_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"MX3BPM{bpm:02d}DAQ01:PosY:MeanValue_RBV", connect=True)
-                self.intensity_PVs[f"{bpm}"]  = epics.pv.get_pv(f"MX3BPM{bpm:02d}DAQ01:SumAll:MeanValue_RBV", connect=True)
+                self.x_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"MX3BPM{bpm:02d}DAQ01:PosX:MeanValue_RBV", connect=True, timeout=0.1)
+                self.y_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"MX3BPM{bpm:02d}DAQ01:PosY:MeanValue_RBV", connect=True, timeout=0.1)
+                self.intensity_PVs[f"{bpm}"]  = epics.pv.get_pv(f"MX3BPM{bpm:02d}DAQ01:SumAll:MeanValue_RBV", connect=True, timeout=0.1)
             else: # is odd
-                self.x_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"MX3DAQIOC{bpm:02d}:BPM0:PosX_RBV", connect=True)
-                self.y_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"MX3DAQIOC{bpm:02d}:BPM0:PosY_RBV", connect=True)
-                self.intensity_PVs[f"{bpm}"]  = epics.pv.get_pv(f"MX3DAQIOC{bpm:02d}:BPM0:Int_RBV", connect=True)
+                self.x_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"MX3DAQIOC{bpm:02d}:BPM0:PosX_RBV", connect=True, timeout=0.1)
+                self.y_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"MX3DAQIOC{bpm:02d}:BPM0:PosY_RBV", connect=True, timeout=0.1)
+                self.intensity_PVs[f"{bpm}"]  = epics.pv.get_pv(f"MX3DAQIOC{bpm:02d}:BPM0:Int_RBV", connect=True, timeout=0.1)
 
         return None
     
@@ -471,9 +504,9 @@ class TBPMs(BPMs):
         Key format: `bpm`, *e.g.* `"2"`
         """
         for bpm in [1, 2]:
-            self.x_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:X_POSITION_MONITOR", connect=True)
-            self.y_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:Y_POSITION_MONITOR", connect=True)
-            self.intensity_PVs[f"{bpm}"]  = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:TEMPERATURE_SUM_MONITOR", connect=True)
+            self.x_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:X_POSITION_MONITOR", connect=True, timeout=0.1)
+            self.y_position_PVs[f"{bpm}"] = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:Y_POSITION_MONITOR", connect=True, timeout=0.1)
+            self.intensity_PVs[f"{bpm}"]  = epics.pv.get_pv(f"SR04FE01BPM{bpm:02d}:TEMPERATURE_SUM_MONITOR", connect=True, timeout=0.1)
 
         return None
 

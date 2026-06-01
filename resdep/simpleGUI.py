@@ -20,7 +20,7 @@ import sys
 import os
 from pathlib import Path
 import logging
-import warnings
+import traceback
 import subprocess
 import platform
 import numpy as np
@@ -132,8 +132,7 @@ class MainWindow(QWidget):
         self.resdepQt.finished.connect(self.on_finish)
 
         # helper classes
-        sectors_to_fit = ["1", "4", "8", "11", "12", "13"]
-        self.processed_data = ProcessedData(resdep=self.resdep, sectors_to_fit=sectors_to_fit)
+        self.processed_data = ProcessedData(resdep=self.resdep)
         self.fitting        = FittingClass(resdep=self.resdep, processed_data=self.processed_data)
 
         # init window
@@ -205,6 +204,7 @@ class MainWindow(QWidget):
         
         # --- status bar
         self.progress_bar = QProgressBar(self)
+        self.progress_bar.setMaximum(self.resdep.sweep_steps)
 
         # status bar -------------------------------- #
         self.status_bar = QStatusBar()
@@ -223,6 +223,8 @@ class MainWindow(QWidget):
         self.automatic_scan_timer = QTimer(self)
         self.automatic_scan_timer.setInterval(1000)
         self.automatic_scan_timer.timeout.connect(self.update_automatic_scan_timer)
+
+        self.config_logger()
 
         self.show()
 
@@ -285,7 +287,9 @@ class MainWindow(QWidget):
             hostname.index("OPI")
             self.data_path = Path("/asp/usr/data/resdep")
         except ValueError: # not running on AS OPI
+            Path.mkdir(self.data_path/"GUI_log", exist_ok=True) # does not wipe the dir if it exists, just continues
             pass
+        self.logfile_path = Path(self.data_path/"GUI_log")
 
         self.button_data_path = QPushButton("Data")
         self.button_data_path.setIcon(dir_icon)
@@ -391,6 +395,38 @@ class MainWindow(QWidget):
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    def config_logger(self, ) -> None:
+        """Configure the logger to write to console and logfile
+        """
+        self.start_time = datetime.datetime.now()
+        date_str 		= self.start_time.strftime("%Y-%m-%d")
+        hours_str 		= self.start_time.strftime("%H%Mh")
+        seconds_str 	= self.start_time.strftime("%Ss")
+        filename: str   = f"logfile_{date_str}_{hours_str}-{seconds_str}.log"
+
+        logger_format = "%(asctime)s - %(levelname)s - %(message)s"
+        file_logger = logging.getLogger("")
+        logging.basicConfig(level=logging.DEBUG,
+                            format=logger_format,
+                            filename=self.logfile_path / filename,
+                            filemode='w')
+        # Until here logs only to file: 'logfile'
+        # define a new Handler to log to console as well
+        console_logger = logging.StreamHandler()
+        # optional, set the logging level
+        console_logger.setLevel(logging.INFO)
+        # set a format which is the same for console use
+        formatter = logging.Formatter(logger_format)
+        # tell the handler to use this format
+        console_logger.setFormatter(formatter)
+        # add the handler to the root logger
+        file_logger.addHandler(console_logger)
+
+        logging.debug(self.start_time)
+        logging.debug("--- simpleGUI starting up ---")
+
+        return None
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def enable_abort_button(self, enable: bool = True) -> None:
         """
         Enables / disables abort button and changes color to red when experiment is running or automatic scans enabled. 
@@ -425,6 +461,10 @@ class MainWindow(QWidget):
         self.enable_abort_button()
         # update status bar
         self.on_status_update("Starting up...")
+
+        # update progress bar
+        self.resdep.calculate_range()
+        self.progress_bar.setMaximum(self.resdep.sweep_steps)
             
         # call resdep
         self._running_experiment = True
@@ -450,30 +490,10 @@ class MainWindow(QWidget):
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def on_data_path_update(self, data_path: Path) -> None:
         """
-        Assign data path from resdep to GUI button 
-        Spawn error logger
+        Assign data path from resdep to GUI button.
         """
         self.data_path = data_path
         self.button_data_path.setEnabled(True)
-
-
-        # --- logging to console and file
-        # Create a logger
-        self.logger = logging.getLogger('resdep_logger')
-        self.logger.setLevel(logging.DEBUG)
-        # Create a formatter to define the log format
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        # Create a file handler to write logs to a file
-        file_handler = logging.FileHandler(data_path / "logfile.log")
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(formatter)
-        # Create a stream handler to print logs to the console
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)  # You can set the desired log level for console output
-        console_handler.setFormatter(formatter)
-        # Add the handlers to the logger
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
         
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -488,7 +508,6 @@ class MainWindow(QWidget):
 
         # reset state
         self._running_experiment = False
-        self._abort_requested = False
         # disable abort button
         self.disable_abort_button()
 
@@ -498,15 +517,8 @@ class MainWindow(QWidget):
         self.progress_bar.setValue(100)
         self.progress_bar.setMaximum(100)
 
-        E0_mean, E0_mean_sigfig, fitted_beam_energy_string, error = self.fitting.automagic_fit()
-        # update GUI
-        if error:
-            self.error_label.setText(error)
-        else:
-            self.beam_energy_label.setText(fitted_beam_energy_string)
-        # TODO: write to PV????
-        # beam_energy_PV.put(E0_mean_sigfig)
-
+        if not self._abort_requested:
+            self.fit_beam_energy()
 
         # Timer things
         # self.timer.stop()
@@ -516,6 +528,9 @@ class MainWindow(QWidget):
             self.on_status_update("Waiting for next automatic scan...")
         else:
             self.on_status_update("Ready")
+
+        if self._abort_requested:
+            self._abort_requested = False
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -569,15 +584,29 @@ class MainWindow(QWidget):
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def fit_beam_energy(self, ) -> None:
+        """Calls magic fitting functions from [`_fitting`][resdep._fitting] to extract beam energy from data.
         """
-        Need to figure this out
-        """
+        error=None
+        fitted_beam_energy_string = ""
 
-        self.processed_data.calculate_ratio_loss(sigma=5)
+        try: # try block so GUI doesn't crash
+            self.processed_data.calculate_ratio_loss(sigma=200, bin=True)
 
-        # self.fitting.automagic_fit()
+            _, _, fitted_beam_energy_string, error = self.fitting.automagic_fit()
 
+        except Exception: # Catch something critical that `automagic_fit()` does not handle
+            error = traceback.format_exc()
+            logging.error(error)
+
+        finally:
+            # update GUI
+            if error:
+                self.error_label.setText(error)
+            else:
+                self.beam_energy_label.setText(fitted_beam_energy_string)
         
+        # TODO: write to PV????
+        # beam_energy_PV.put(E0_mean_sigfig)
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -613,20 +642,32 @@ class MainWindow(QWidget):
         if self.checkbox_machine_studies.isChecked():
             verdict = True
             return verdict, error
+        
+        # If not connected/disconnected, give PVs a chance to reconnect before state check logic
+        for pv in [self.beam_mode_PV, self.current_PV]:
+            if not pv.connected:
+                pv.connect(timeout=1)
+                time.sleep(1)
+            # if still not connected, fail
+            if not pv.connected:
+                error = f"{pv} refused to connect. Cannot determine machine state."
+                logging.warning(error)
+                return False, error
+                
 
-        beam_mode: Union[int, None] = self.beam_mode_PV.get()
-        current: Union[float, None] = self.current_PV.get()
+        beam_mode: Union[int, None] = self.beam_mode_PV.get(timeout=0.1)
+        current: Union[float, None] = self.current_PV.get(timeout=0.1)
         time.sleep(0.5)
 
         # if PVs return None, exit early
         if beam_mode is None:
             error = f"beam_mode (FS01:BEAM_MODE_MONITOR) returned None. Expected any of:\n{self.beam_modes}\nAborting request to run resdep."
-            warnings.warn(error)
+            logging.warning(error)
             return False, error
         
         if current is None:
             error = "Current PV (DCCT) returned None.\nAborting request to run resdep."
-            warnings.warn(error)
+            logging.warning(error)
             return False, error
 
         # Assume can run, else check for errors
@@ -642,22 +683,22 @@ class MainWindow(QWidget):
             self.polarisation   >= 95,   # %
             not recent_beam_injection
         ]):
-            verdict= True
+            verdict = True
         elif current < 150: # mA
             error = f"Less than 150 mA beam current.\n{current:0.0f} mA is not enough resolution for measurement.\nAborting request to run resdep."
-            warnings.warn(error)
+            logging.warning(error)
             return False, error
         elif self.polarisation < 95: # %
             error = "Beam polarisation is less than 95%; not enough resolution.\nAborting request to run resdep."
-            warnings.warn(error)
+            logging.warning(error)
             return False, error
         elif recent_beam_injection:
             error = "Beam has been injected too recently and has not have enought time to polarise (requires at least 39 minutes)."
-            warnings.warn(error)
+            logging.warning(error)
             return False, error
         elif scan_type == "automatic" and beam_mode < 8: # not "User Beam" in automatic mode
             error = f"beam_mode (FS01:BEAM_MODE_MONITOR) returned \"{self.beam_modes[beam_mode]}\". Expected any form of 'User Beam'.\nAborting request to run resdep."
-            warnings.warn(error)
+            logging.warning(error)
             return False, error
         
         return verdict, error 
@@ -763,10 +804,10 @@ class MainWindow(QWidget):
                 )
 
                 if answer == QMessageBox.StandardButton.Yes:
-                    self.close()
                     self.resdepQt.abort()
-                else: # if no
-                    self.close()
+                    self.on_status_update("Waiting for experiment to finish...")
+                    while self._running_experiment:
+                        time.sleep(0.01)
 
             else: # if experiment is not running
                 self.on_status_update("Ready")
@@ -829,9 +870,24 @@ class MainWindow(QWidget):
             10: "UserBeam Exotic"
         }
 
-        self.beam_mode_PV = epics.pv.get_pv("FS01:BEAM_MODE_MONITOR", connect=True)
-        self.current_PV = epics.pv.get_pv("SR11BCM01:CURRENT_MONITOR", connect=True)
+        self.beam_mode_PV = epics.pv.get_pv("FS01:BEAM_MODE_MONITOR", connect=True, timeout=1)
+        self.current_PV = epics.pv.get_pv("SR11BCM01:CURRENT_MONITOR", connect=True, timeout=1)
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    # *--------------------------------* #
+	# *----------- QT Config ----------* #
+	# *--------------------------------* #
+    def closeEvent(self, event) -> None:
+        """
+        Shutdown tasks for GUI. For now, just save shutdown time to log.
+        """
+        logging.debug("--- simpleGUI shutting down ---")
+        shutdown_time = datetime.datetime.now()
+        logging.debug(shutdown_time)
+        
+        self.close()
+        event.accept()
 
+        return None
 
 
 ##########################

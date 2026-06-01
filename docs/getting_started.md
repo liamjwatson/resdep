@@ -9,15 +9,25 @@ Sweeps the kicker drive frequency over a specified range (the spin tune) and rec
 
 1. Clone this repo:
 
-    ```git clone https://bitbucket.synchrotron.org.au/scm/~watsonl/resdep.git```
-
-2. Navigate to the repo root durectory
-3. Install with **pip** or **uv**: 
-
-=== "uv"
+=== "bitbucket"
 
     ```bash
-    uv pip install -e .
+    git clone https://bitbucket.synchrotron.org.au/scm/acc/resdep.git
+    ```
+
+=== "github"
+    
+    ```bash
+    git clone https://github.com/liamjwatson/resdep.git
+    ```
+
+2. Navigate to the repo root durectory
+3. Install with from wheel (**OPI**), or standard installation (**pip**):
+
+=== "OPI"
+
+    ```bash
+    bash dist/install_resdep.sh
     ```
 
 === "pip"
@@ -27,13 +37,15 @@ Sweeps the kicker drive frequency over a specified range (the spin tune) and rec
     ```
 
 
-### Installation on OPIs
+#### Alternate installation on OPIs
 1. Clone the latest **tag**, which contains the latest source distribution (*.tar.gz* file) and corresponding wheel (*.whl* file) in `./dist`.
 2. Either:  
     1. **execute** `install_resdep.sh`, *or*
-    2. Inside the folder, **run**
+    2. Inside the folder, **run** (filling in `$WHEEL_FILE_NAME` appropriately)
 
-```pip install $WHEEL_FILE_NAME.whl --find-links ./ --no-index --no-deps```
+```bash
+pip install $WHEEL_FILE_NAME.whl --find-links ./ --no-index --no-deps
+```
 
 ## Usage
 - **Kubili**: standard operation, see $URL_TO_CONFLUENCE_PAGE

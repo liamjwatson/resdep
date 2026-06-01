@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Union, Callable
 import builtins
 import numpy as np
 import numpy.typing as npt
-import logging, traceback
+import logging 
+import traceback
 from functools import partial
 
 from PySide6.QtCore import QSize
@@ -32,20 +33,17 @@ from scipy.special import erf
 # resdep
 from resdep._calculations import energy_calc, freq_calc
 if TYPE_CHECKING:
-    from resdep.experiment import ResonantDepolarisation, ProcessedData
-    from resdep._fitting import FittingClass
-    
+    from resdep.experiment import ResonantDepolarisation, ProcessedData    
 
 class GUIGraph(FigureCanvasQTAgg):
     """
     Spawn canvas instance object to add and modify in GUI
     """
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, dpi=100):
 
         # Create the figure and figure canvas
-        self.figure = Figure()
-        self.axes = self.figure.add_subplot(111)
-        self.canvas = self.figure.canvas
+        self.figure = Figure(dpi=dpi)
+        self.axes = self.figure.add_subplot()
 
         super().__init__(self.figure) 
         self.setParent(parent)
@@ -57,16 +55,20 @@ class GUIGraph(FigureCanvasQTAgg):
     def minimumSizeHint(self):
         return QSize(700, 600)
     
-class StandaloneGraph():
+class StandaloneGraph(FigureCanvasQTAgg):
     """
     Spawn an interactive graph object to plot to manually.
-    Defines canvas correctly so that `draw.idle()` can be effective utilised/overrided.
+    Defines canvas correctly so that `draw.idle()` and `plt.show()` can be effective utilised.
     """
-    def __init__(self,):
+    def __init__(self, parent=None, dpi=100):
+        self.figure = Figure(dpi=dpi)
+        self.axes = self.figure.add_subplot()
+        # Create a canvas backend for non-GUI use
+        super().__init__(self.figure)
+        self.setParent(parent)
 
-        # Create the figure and figure canvas
-        self.figure, self.axes = plt.subplots(figsize=(7,6), layout="constrained")
-        self.canvas = self.figure.canvas
+    def show(self):
+        plt.show()
 
 
 # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -98,7 +100,6 @@ class PlottingClass():
         """
         Plots the ratio of the losses between the two ADC windows.
 
-        
         Tip
         ---
         First requires (from [`resdep.experiment`][])
@@ -109,10 +110,9 @@ class PlottingClass():
         Data is smoothed by a gaussian function with a sigma defined on the GUI, or by standard binning (200 points).
         """
         try:
-            for sector in self.processed_data.sectors_to_fit:
-                key = f"{sector}B"
-                x = self.processed_data.freqs_array
-                y = self.processed_data.ratio_loss[key]
+            x = self.processed_data.freqs_array
+            for sector, loss in self.processed_data.ratio_loss.items():
+                y = loss
                 # plot
                 vertical_offset = 0.01 * int(sector)
                 self.graph.axes.plot(x, y + vertical_offset, label=f"{sector}B")
@@ -129,7 +129,7 @@ class PlottingClass():
             self.graph.axes.ticklabel_format(useOffset=False)
             self.second_axis.ticklabel_format(useOffset=False)
 
-            self.graph.canvas.draw_idle()
+            self.graph.draw_idle()
 
         except Exception:
             logging.error(traceback.format_exc())
@@ -211,7 +211,6 @@ class PlottingClass():
         This includes synchrotron sidebands and betatron resonances. 
         Updates dynamically on Qt GUI settings pane changes.
         """
-    
         # --- resonance of competing tunes (betatron, synchrotron)
         # plot these resonances around the expected depolarisation resonance
         synchrotron_sidebands = [self.resdep.res_freq + i*(self.resdep.f_rev * self.resdep.v_synch) for i in [-3, -2, -1, 1, 2, 3]]
@@ -253,7 +252,8 @@ class PlottingClass():
         self.graph.axes.ticklabel_format(useOffset=False)
         self.second_axis.ticklabel_format(useOffset=False)
 
-        self.graph.canvas.draw_idle()
+        self.graph.draw_idle()
+
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def energy_secodary_axis(self,) -> tuple[Callable, Callable]:
@@ -264,12 +264,14 @@ class PlottingClass():
         )
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
     def plot_step_loss_detection(self, ) -> None:
+        """DEPRECIATED
+        """
 
         peaks = []
 
+        x = self.processed_data.freqs_array
         for sector in self.processed_data.sectors_to_fit:
             key = f"{sector}B"
-            x = self.processed_data.freqs_array
             y = self.processed_data.ratio_loss[key]
             # set 0 
             y += -np.mean(y[:100]) 
@@ -315,7 +317,7 @@ class PlottingClass():
         peaks_stddev = np.std(peaks)
         energy_mean = energy_calc(peaks_mean, self.resdep.f_rev, self.resdep.harmonic)
         energy_median = energy_calc(peaks_median, self.resdep.f_rev, self.resdep.harmonic)
-        print(f"--- PEAKS ---")
+        print("--- PEAKS ---")
         print(f"mean \t\t= {peaks_mean}")
         print(f"variance \t= {peaks_var}")
         print(f"stddev \t\t= {peaks_stddev}")
@@ -341,7 +343,7 @@ class PlottingClass():
         self.graph.axes.ticklabel_format(useOffset=False)
         self.second_axis.ticklabel_format(useOffset=False)
 
-        self.graph.canvas.draw_idle()
+        self.graph.draw_idle()
 
         return None 
     @staticmethod

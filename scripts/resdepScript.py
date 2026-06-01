@@ -16,8 +16,8 @@ from scipy.ndimage import gaussian_filter1d
 from scipy import stats, optimize
 
 
-from epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions  
-from progressBars import printProgressBar
+from resdep.epicsBLMs import BLMs # Libera BLM python class, stores states, dicts, functions  
+from resdep._progressBars import printProgressBar
 # import plottingModules
 # from epicsScrapers import Scraper
 # from alignBLMtoFillPattern import alignFillPattern
