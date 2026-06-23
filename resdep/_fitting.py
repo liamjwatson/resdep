@@ -1,6 +1,7 @@
 """
 Helper class for resdep related to fitting cumulative distribution (cdf) curves to beam loss data.
 """
+
 """
 ███████╗██╗████████╗████████╗██╗███╗   ██╗ ██████╗ 
 ██╔════╝██║╚══██╔══╝╚══██╔══╝██║████╗  ██║██╔════╝ 
@@ -18,30 +19,45 @@ import numpy.typing as npt
 from scipy import optimize, stats
 from scipy.ndimage import gaussian_filter1d
 
-from resdep._calculations import energy_calc, round_to_1_sigfig, round_to_error_sigfig
+from resdep._calculations import (
+    energy_calc,
+    round_to_1_sigfig,
+    round_to_error_sigfig,
+)
+
 if TYPE_CHECKING:
     from resdep.experiment import ResonantDepolarisation, ProcessedData
+
 
 class FittingError(Exception):
     pass
 
-class FittingClass():
+
+class FittingClass:
     """
     Fitting class for resdep. Fits error functions to ratio loss data.
 
     Info
     ----
-    [`ResonantDepolarisation`][resdep.experiment.ResonantDepolarisation] and 
+    [`ResonantDepolarisation`][resdep.experiment.ResonantDepolarisation] and
     [`ProcessedData`][resdep.experiment.ProcessedData]
     are passed in by reference when instanced. This is to reduce the number of args passed in and returned
     by helper functions.
     """
-    def __init__(self, resdep: "ResonantDepolarisation", processed_data: "ProcessedData"):
-        self.resdep         = resdep
+    def __init__(
+        self, resdep: "ResonantDepolarisation", processed_data: "ProcessedData"
+    ):
+        self.resdep = resdep
         self.processed_data = processed_data
-    # ------------------------------------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     @staticmethod
-    def model(x: Union[float, npt.NDArray[np.floating]], mean: float, scaling_factor: float, amplitude: float, offset: float):
+    def model(
+        x: Union[float, npt.NDArray[np.floating]],
+        mean: float,
+        scaling_factor: float,
+        amplitude: float,
+        offset: float,
+    ):
         """
         Cumulative distribution function, essentially a weighted error function
 
@@ -66,8 +82,15 @@ class FittingClass():
         """
         law = stats.norm(loc=mean, scale=scaling_factor)
         return amplitude * law.cdf(x) + offset
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def fit_error_functions(self, step_location: Union[float, np.floating, None] = None) -> tuple[dict[str, npt.NDArray[np.floating]], dict[str, float], dict[str, float], str]:
+    # -------------------------------------------------------------------------
+    def fit_error_functions(
+        self, step_location: Union[float, np.floating, None] = None
+    ) -> tuple[
+        dict[str, npt.NDArray[np.floating]],
+        dict[str, float],
+        dict[str, float],
+        str,
+    ]:
         """
         Fits an error function to the ratio beam loss data.
 
@@ -89,7 +112,7 @@ class FittingClass():
             formatted string detailing the resonance frequency, corresponding energy, and goodness-of-fit (r square)
 
         Tip
-        --- 
+        ---
         First requires (from [resdep.experiment][])
 
         1. Instance [`ProcessedData`][resdep.experiment.ProcessedData]
@@ -97,91 +120,125 @@ class FittingClass():
         """
 
         # fit results dicts
-        y_model                         : dict[str, npt.NDArray[np.float64]]    = {}
-        fitted_beam_energy_frequencies  : dict[str, float]                      = {}
-        fitted_beam_energies            : dict[str, float]                      = {}
-        fitted_beam_energy_stddevs      : dict[str, float]                      = {}
-        fit_results                     : str                                   = ""        
+        y_model: dict[str, npt.NDArray[np.float64]] = {}
+        fitted_beam_energy_frequencies: dict[str, float] = {}
+        fitted_beam_energies: dict[str, float] = {}
+        fitted_beam_energy_stddevs: dict[str, float] = {}
+        fit_results: str = ""
         mask = self.processed_data.mask
         if step_location is None:
             step_location = self.resdep.res_freq
         freqs = self.processed_data.freqs_array[mask]
 
         # bounds
-        bounds: dict[str, optimize.Bounds] = {} # defaults to +- infty
-        bounds["mean"]              = optimize.Bounds(lb=freqs[0], ub=freqs[-1])
-        bounds["scaling factor"]    = optimize.Bounds()
-        bounds["amplitude"]         = optimize.Bounds(lb=0)
-        bounds["offset"]            = optimize.Bounds(lb=0)
-        bounds_formatted            = ([bound.lb[0] for bound in bounds.values()], [bound.ub[0] for bound in bounds.values()])
-
+        bounds: dict[str, optimize.Bounds] = {}  # defaults to +- infty
+        bounds["mean"] = optimize.Bounds(lb=freqs[0], ub=freqs[-1])
+        bounds["scaling factor"] = optimize.Bounds()
+        bounds["amplitude"] = optimize.Bounds(lb=0)
+        bounds["offset"] = optimize.Bounds(lb=0)
+        bounds_formatted = (
+            [bound.lb[0] for bound in bounds.values()],
+            [bound.ub[0] for bound in bounds.values()],
+        )
 
         for sector in self.processed_data.sectors_to_fit:
-            
             key = f"{sector}B"
-            ratio_loss  = self.processed_data.ratio_loss[key][mask]
-            
+
             # --- calculate fit
             try:
+                ratio_loss = self.processed_data.ratio_loss[key][mask]
                 popt, pcov = optimize.curve_fit(
-                    f       = self.model, 
-                    xdata   = freqs, 
-                    ydata   = ratio_loss, 
-                    p0      = [step_location, 0.2, 0.5, 0.1], # 0.2, 0.04 , 1
-                    bounds  = bounds_formatted,
-                    maxfev  = 20000
+                    f=self.model,
+                    xdata=freqs,
+                    ydata=ratio_loss,
+                    p0=[step_location, 0.2, 0.5, 0.1],  # 0.2, 0.04 , 1
+                    bounds=bounds_formatted,
+                    maxfev=20000,
                 )
 
                 # stats
-                mean_freq       = popt[0]
-                mean_energy     = energy_calc(freq=mean_freq, f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic)
-                var_freq        = np.diag(pcov)[0]
-                sigma_freq      = np.sqrt(var_freq)
-                sigma_energy    = (
-                    energy_calc(freq=(mean_freq + sigma_freq), f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic) 
-                    - energy_calc(freq=(mean_freq - sigma_freq), f_rev=self.resdep.f_rev, harmonic=self.resdep.harmonic)
+                mean_freq = popt[0]
+                mean_energy = energy_calc(
+                    freq=mean_freq,
+                    f_rev=self.resdep.f_rev,
+                    harmonic=self.resdep.harmonic,
+                )
+                var_freq = np.diag(pcov)[0]
+                sigma_freq = np.sqrt(var_freq)
+                sigma_energy = energy_calc(
+                    freq=(mean_freq + sigma_freq),
+                    f_rev=self.resdep.f_rev,
+                    harmonic=self.resdep.harmonic,
+                ) - energy_calc(
+                    freq=(mean_freq - sigma_freq),
+                    f_rev=self.resdep.f_rev,
+                    harmonic=self.resdep.harmonic,
                 )
 
                 # -- calculate goodness of fit
                 # residual sum of squares
                 y_fit = self.model(freqs, *popt)
-                ss_res = np.sum((ratio_loss - y_fit)**2)
+                ss_res = np.sum((ratio_loss - y_fit) ** 2)
                 # total sum of squares
-                ss_tot = np.sum((ratio_loss - np.mean(ratio_loss))**2)
+                ss_tot = np.sum((ratio_loss - np.mean(ratio_loss)) ** 2)
                 # r-squared
                 r2 = 1 - (ss_res / ss_tot)
 
                 # VAR_FREQ_UPPER_BOUND = 5e-5 # kHz
-                GOODNESS_OF_FIT_LOWER_BOUND = 0.6
-                if r2 < GOODNESS_OF_FIT_LOWER_BOUND: # poor fit
-                    logging.warning(f"Poor fit in sector {sector}, r^2: {r2:0.2f} < threshold ({GOODNESS_OF_FIT_LOWER_BOUND}). Discarding...")
+                R2_LOWER_BOUND = 0.4
+                if r2 < R2_LOWER_BOUND:  # poor fit
+                    logging.warning(
+                        f"Poor fit in sector {sector}, " 
+                        + f"r^2: {r2:0.2f} < threshold ({R2_LOWER_BOUND}). "
+                        + "Discarding..."
+                    )
                     fit_results += f"sector={sector}, poor quality fit!\n"
                     self.processed_data._poor_fit[key] = True
 
                 else:
-                    y_model[key]                        = y_fit
-                    fitted_beam_energy_frequencies[key] = mean_freq  
-                    fitted_beam_energies[key]           = mean_energy
-                    fitted_beam_energy_stddevs[key]     = sigma_energy
+                    y_model[key] = y_fit
+                    fitted_beam_energy_frequencies[key] = mean_freq
+                    fitted_beam_energies[key] = mean_energy
+                    fitted_beam_energy_stddevs[key] = sigma_energy
 
-                    fit_results += f"sector={int(sector):02d}, f0={mean_freq:0.3f} kHz, E0={mean_energy:0.5f} GeV, r^2={r2:0.2f}\n"
-                    self.processed_data._poor_fit[key]   = False
+                    fit_results += (
+                        f"sector={int(sector):02d}, " 
+                        + f"f0={mean_freq:0.3f} kHz, " 
+                        + f"E0={mean_energy:0.5f} GeV, " 
+                        + f"r^2={r2:0.2f}\n"
+                    )
+                    self.processed_data._poor_fit[key] = False
 
             except RuntimeError:
                 logging.error(traceback.format_exc())
-                fit_results += f"sector={sector}, fit failed! (did not converge)\n"
+                fit_results += (
+                    f"sector={sector}, " 
+                    + "fit failed! (did not converge)\n"
+                )
+
+            except KeyError:  # if sector is OOS
+                continue
 
         # pass to processed_data:
-        self.processed_data.y_model                     = y_model
-        self.processed_data.fitted_beam_energies        = fitted_beam_energies
-        self.processed_data.fitted_beam_energy_stddevs  = fitted_beam_energy_stddevs
-        self.processed_data.fit_results                 = fit_results
+        self.processed_data.y_model = y_model
+        self.processed_data.fitted_beam_energies = fitted_beam_energies
+        self.processed_data.fitted_beam_energy_stddevs = (
+            fitted_beam_energy_stddevs
+        )
+        self.processed_data.fit_results = fit_results
 
-        return y_model, fitted_beam_energies, fitted_beam_energy_stddevs, fit_results
-    # ------------------------------------------------------------------------------------------------------
-    def calculate_fitted_energy_stats(self, ) -> tuple[float, float, float, float, str]:
+        return (
+            y_model,
+            fitted_beam_energies,
+            fitted_beam_energy_stddevs,
+            fit_results,
+        )
+    # -------------------------------------------------------------------------
+    def calculate_fitted_energy_stats(
+        self,
+    ) -> tuple[float, float, float, float, str]:
         """
-        Calculate the mean and standard deviation of the fitted energies for all the selected sectors. 
+        Calculate the mean and standard deviation of the fitted energies for all the selected sectors.
 
         Returns
         -------
@@ -194,41 +251,56 @@ class FittingClass():
         E0_stddev_sigfig: float
             Two standard deviations of the mean energy to one significant figure
         fitted_beam_energy_str: str
-            Mean energy plus minus two standard deviations, all quoted to the appropirate number of sigfigs, 
-            as a formatted str. Example: 3.030287 GeV \u00B1 7 keV
+            Mean energy plus minus two standard deviations, all quoted to the appropirate number of sigfigs,
+            as a formatted str. Example: 3.030287 GeV \u00b1 7 keV
 
         Tip
-        --- 
+        ---
         First requires executing [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions]
         """
 
-        energies: dict[str, float]  = self.processed_data.fitted_beam_energies
-        stddevs : dict[str, float]  = self.processed_data.fitted_beam_energy_stddevs
+        energies: dict[str, float] = self.processed_data.fitted_beam_energies
+        stddevs: dict[str, float] = (
+            self.processed_data.fitted_beam_energy_stddevs
+        )
 
         E0_mean: float = float(np.mean(list(energies.values())))
-        
-        if len(energies) == 0: 
-            raise KeyError("dict \"energies\" contains no data.")
+
+        if len(energies) == 0:
+            raise KeyError('dict "energies" contains no data.')
         elif len(energies) == 1:
-            E0_stddev: float = float(2*list(stddevs.values())[0])
+            E0_stddev: float = float(2 * list(stddevs.values())[0])
         else:
-            E0_stddev: float = float(2*np.std(list(energies.values())))
-        
+            E0_stddev: float = float(2 * np.std(list(energies.values())))
+
         E0_stddev_sigfig: float = round_to_1_sigfig(E0_stddev)
-        E0_mean_sigfig  : float = round_to_error_sigfig(E0_mean, E0_stddev_sigfig)
-        fitted_beam_energy_str = f"{E0_mean_sigfig} GeV" + u" \u00B1 " + f"{E0_stddev_sigfig*1e6:.0f} keV"
+        E0_mean_sigfig: float = round_to_error_sigfig(
+            E0_mean, E0_stddev_sigfig
+        )
+        fitted_beam_energy_str = (
+            f"{E0_mean_sigfig} GeV"
+            + " \u00b1 "
+            + f"{E0_stddev_sigfig * 1e6:.0f} keV"
+        )
 
-        self.processed_data.E0_mean                 = E0_mean
-        self.processed_data.E0_stddev               = E0_stddev
-        self.processed_data.E0_mean_sigfig          = E0_mean_sigfig
-        self.processed_data.E0_stddev_sigfig        = E0_stddev_sigfig
-        self.processed_data.fitted_beam_energy_str  = fitted_beam_energy_str
+        self.processed_data.E0_mean = E0_mean
+        self.processed_data.E0_stddev = E0_stddev
+        self.processed_data.E0_mean_sigfig = E0_mean_sigfig
+        self.processed_data.E0_stddev_sigfig = E0_stddev_sigfig
+        self.processed_data.fitted_beam_energy_str = fitted_beam_energy_str
 
-                
-        return E0_mean, E0_stddev, E0_mean_sigfig, E0_stddev_sigfig, fitted_beam_energy_str
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def find_step_change_in_beam_loss(self, ) -> np.floating:
-        """Determines step loss from the fact that the derivative of a cdf is a gauss. 
+        return (
+            E0_mean,
+            E0_stddev,
+            E0_mean_sigfig,
+            E0_stddev_sigfig,
+            fitted_beam_energy_str,
+        )
+    # -------------------------------------------------------------------------
+    def find_step_change_in_beam_loss(
+        self,
+    ) -> np.floating:
+        """Determines step loss from the fact that the derivative of a cdf is a gauss.
         Forms part of [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
 
         Returns
@@ -244,7 +316,7 @@ class FittingClass():
         Process
         -------
         - Smooth loss data into oblivion, determine the location of the step by the derivative of the smoothed data.
-        - Smooth data approaches cdf (cumulative distribution function ~ error function) 
+        - Smooth data approaches cdf (cumulative distribution function ~ error function)
         - Derivative of error function / cdf is a gauss. Gauss peak should be middle of step in original loss data.
         """
         steps: list[float] = []
@@ -253,31 +325,37 @@ class FittingClass():
             try:
                 key = f"{sector}B"
                 y = np.copy(self.processed_data.ratio_loss[key])
-                # set 0 
-                y += -np.mean(y[:100]) 
+                # set 0
+                y += -np.mean(y[:100])
                 # normalise
-                y *= 1/np.max(y)
+                y *= 1 / np.max(y)
                 # smooth into oblivion
-                y = gaussian_filter1d(input=y, sigma=1000*10//5) # n * 10 datapoints/sec / 5Hz/s scan
+                y = gaussian_filter1d(
+                    input=y, sigma=250 * 10 // 5
+                )  # n * 10 datapoints/sec / 5Hz/s scan
                 # differentiate
                 dy = np.gradient(y)
                 # peak in gradient data --> step position in raw data
                 step = x[np.argmax(dy)]
                 steps.append(step)
-            except KeyError: # if blm is OOS
-                pass # continue loop
-        
+            except KeyError:  # if blm is OOS
+                pass  # continue loop
 
-        steps_mean      : np.floating   = np.mean(steps)
-        steps_variance  : np.floating   = np.var(steps)
-        UPPER_BOUND     : float         = 0.1
+        steps_mean: np.floating = np.mean(steps)
+        steps_variance: np.floating = np.var(steps)
+        UPPER_BOUND: float = 0.1
 
         if steps_variance >= UPPER_BOUND:
-            raise FittingError("Variance in data is too large. No mean location found for step.")
+            raise FittingError(
+                "Variance in data is too large." 
+                "No mean location found for step."
+            )
 
         return steps_mean
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def automagic_fit(self, ) -> tuple[float, float, str, Union[str, None]]:
+    # -------------------------------------------------------------------------
+    def automagic_fit(
+        self,
+    ) -> tuple[float, float, str, Union[str, None]]:
         """
         Calculates best guess for resonance in the data (based off derivative cdf -> gauss). Applies fit over best guess of frequency range.
 
@@ -291,7 +369,7 @@ class FittingClass():
 
         fitted_beam_energy_string: str
             Formatted beam energy string of the form:\\
-            \"`E0` GeV \u00B1 `error` keV\" \\
+            \"`E0` GeV \u00b1 `error` keV\" \\
             where the energy is quoted to the number of significant figures in the error.
 
         Tip
@@ -301,20 +379,20 @@ class FittingClass():
         1. Instance [`ProcessedData`][resdep.experiment.ProcessedData]
         2. Run member function [`calculate_ratio_loss`][resdep.experiment.ProcessedData.calculate_ratio_loss]
         """
-        error           : Union[str, None]                                  = None
-        mask            : Union[npt.NDArray[np.bool_], "builtins.ellipsis"] = ...
-        steps_mean      : Union[np.floating, None]                          = None
+        error: Union[str, None] = None
+        mask: Union[npt.NDArray[np.bool_], "builtins.ellipsis"] = ...
+        steps_mean: Union[np.floating, None] = None
         try:
-            steps_mean      = self.find_step_change_in_beam_loss()
+            steps_mean = self.find_step_change_in_beam_loss()
 
             # calculate freq mask around step --> write to self.processed_data.mask
-            FITTING_BOUNDS  : float         = 2                             # kHz, plus minus
-            lower_bound     : np.floating   = steps_mean - FITTING_BOUNDS   # kHz
-            upper_bound     : np.floating   = steps_mean + FITTING_BOUNDS   # kHz
+            FITTING_BOUNDS: float = 2  # kHz, plus minus
+            lower_bound: np.floating = steps_mean - FITTING_BOUNDS  # kHz
+            upper_bound: np.floating = steps_mean + FITTING_BOUNDS  # kHz
 
-            freqs   = self.processed_data.freqs_array
-            mask    = np.logical_and(freqs >= lower_bound, freqs <= upper_bound)
-            
+            freqs = self.processed_data.freqs_array
+            mask = np.logical_and(freqs >= lower_bound, freqs <= upper_bound)
+
         except FittingError:
             error = traceback.format_exc()
             logging.error(error)
@@ -324,14 +402,23 @@ class FittingClass():
             self.fit_error_functions(step_location=steps_mean)
 
             if all(self.processed_data._poor_fit.values()):
-                raise FittingError("All fits were poor (too much variance). Intervention required.Is everything okay with the machine?")
-            
-            E0_mean, _, E0_mean_sigfig, _, fitted_beam_energy_str = self.calculate_fitted_energy_stats()
+                raise FittingError(
+                    "All fits were poor (too much variance). "
+                    "Intervention required. " 
+                    "Is everything okay with the machine?"
+                )
+
+            E0_mean, _, E0_mean_sigfig, _, fitted_beam_energy_str = (
+                self.calculate_fitted_energy_stats()
+            )
 
             logging.info(f"Mean beam energy = {fitted_beam_energy_str}")
- 
-        return E0_mean, E0_mean_sigfig, fitted_beam_energy_str, error
 
+            return E0_mean, E0_mean_sigfig, fitted_beam_energy_str, error
+    # -------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("_fitting.py contains class functions for resdep GUIs and should not be run directly.")
+    print(
+        "_fitting.py contains class functions for resdep GUIs and "
+        "should not be run directly."
+    )

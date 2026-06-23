@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""                                                               
+"""
 Barebones Qt layout for running resdep experiments.
 One button to enable automatic scans during user beam.
 Has two manual buttons: "normal scan" and "wide scan"
 """
+
 """
 ███████╗██╗███╗   ███╗██████╗ ██╗     ███████╗     ██████╗ ██╗   ██╗██╗
 ██╔════╝██║████╗ ████║██╔══██╗██║     ██╔════╝    ██╔════╝ ██║   ██║██║
@@ -25,42 +26,40 @@ import subprocess
 import platform
 import numpy as np
 import epics
+
 # Qt
 from PySide6.QtWidgets import (
-    QApplication, 
-    QWidget, 
-    QFormLayout, 
-    QHBoxLayout, 
-    QVBoxLayout, 
-    QProgressBar, 
-    QPushButton, 
+    QApplication,
+    QWidget,
+    QFormLayout,
+    QHBoxLayout,
+    QVBoxLayout,
+    QProgressBar,
+    QPushButton,
     QLabel,
     QStatusBar,
     QStyle,
     QFrame,
     QMessageBox,
     QCheckBox,
-    QDoubleSpinBox
-    )
+    QDoubleSpinBox,
+    QProgressDialog,
+)
 from PySide6.QtCore import (
     Qt,
-    QThreadPool, 
-    QObject, 
-    Signal, 
+    QThreadPool,
+    QObject,
+    Signal,
     QTimer,
     QCoreApplication,
-    )
+)
 
 # resdep
 from resdep.experiment import ProcessedData, ResonantDepolarisation
 from resdep._fitting import FittingClass
-from resdep._archiver import check_for_recent_beam_injection
+from resdep._archiver import check_recent_beam_injection
 
 
-
-##########################
-# -------- GUI --------- #
-##########################
 class MainWindow(QWidget):
     """
     The simple Qt GUI for Resonant Depolarisation \\
@@ -75,49 +74,52 @@ class MainWindow(QWidget):
     2. from :mod:`resdep._fitting`
         1. :class:`FittingClass()'
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        print("⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⡀⠄⢀⠀⠀⠀⠀⠀⠀⠐⡀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠲⡀⠀⠀⠠⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠\n",
-              "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠠⠑⢈⠐⠀⡀⠄⢀⡀⢀⠀⠁⠈⠀⠐⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠀⠀⠀⠐⠀⢉⠀⠀⠀⠀⠀⠀⠀⠂⠉⡄⠀⠠⠁⠘⠄⡂⢁⠀⡀⠀⠀⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠀⠀⠂⠠⠀⠠⠁⡐⠀⠀⠂⠀⠀⠁⠀⠀⠃⠄⠈⠂⠡⢄⠂⠐⠀⠂⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⠀⠀⠀⠙⢦⡀⠀⠐⠀⠀⠀⠀⠀⠂⠌⠀⠁⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠐⠀⠀⠀⠹⡮⠲⢔⣤⣤⡀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠈⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠳⣶⣿⣿⣿⣿⣷⣦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠀⠀⠀⠢⡀⠀⠀⠀⠀⠠⠀⠀⠀⡀⢄⢦⡝⢿⣿⣿⣿⣿⣿⣿⡿⠷⠖⠀⠐⠀⠀⠒⠤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠀⠀⠀⠀⠀⢤⣀⠀⠀⠀⠀⢄⡻⡟⠘⢼⣼⣿⣿⣿⣿⠿⠛⠀⠀⠀⡀⣀⣤⣿⣤⣤⣀⡀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠷⣶⡦⠔⠮⡟⠾⢶⣿⣿⡿⠛⠉⢀⠀⣀⣤⣲⣿⣿⣿⣿⣿⣿⣿⣿⣿⣡⡄⠀⢀⠢⢁⣟⣦⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡈⠛⢟⡿⠿⢧⣾⢝⡩⠂⣁⣤⣷⢿⣫⣿⣿⢿⣿⣿⣿⣿⣿⣷⣿⣿⡿⠆⠀⢸⠠⢿⢿⡯⣿⢷⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠘⢿⣶⣶⣤⣤⣴⣠⣤⣄⡉⣤⡘⠚⢈⡃⢩⣪⣿⣿⣟⣵⣿⣿⣿⣷⣿⣿⣿⣿⣿⡿⢦⣔⢒⣽⣿⡉⣋⣿⣽⣾⢒⡿⡛⣿⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⠈⠹⣿⣿⣿⣿⣿⣿⣿⣿⣾⣷⣾⣰⢲⣾⣿⣯⣾⣿⣿⣿⣿⡟⣥⢷⣶⣻⣿⣽⣾⣿⡇⠐⠻⠿⠿⠿⠿⠿⠁⠀⠟⠻⠙⣷⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⡀⠀\n",
-              "⣄⠀⠄⣀⠂⠐⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⣿⣿⣿⣿⣿⣿⣿⢫⣾⣷⡟⠿⣿⣿⠿⠛⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠂\n",
-              "⣿⣷⣴⣈⣻⣜⣘⡽⣮⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢣⣿⣿⣿⣿⠀⠈⠀⠀⠀⠀⠀⠀⠀⠰⢲⣶⣶⣶⣾⣷⣾⣶⠀⠀⠀⣰⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⣿⣿⣿⣿⣿⣿⣿⣽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⡿⣿⡿⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⡟⣾⡕⣝⣱⡏⠆⢐⡼⢿⣇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣤⠀⠀⣀⠀⠀⠀⠁⠀⠄⠀⠀⢀⠀⢸⡟⠾⠯⠙⠻⡔⢰⣣⣾⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⡕⠀⣼⣟⠰⠀⠀⠀⠀⠀⢀⣀⣠⣠⣀⠀⠶⣶⡶⣄⣀⢳⣯⢯⡹⣏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⣡⢠⣟⣛⣶⡂⠀⢰⣧⣼⣧⣀⠘⣷⢚⣻⣤⣿⣾⣿⣫⣻⣿⢌⣇⠌⠀⠀⠀⠀⠀⠀⠀⠀⣤⠀⠀⠀⠀\n",
-              "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣷⣶⣿⣿⣿⣿⣦⣸⣿⣿⣿⣿⣶⣾⣿⣻⡟⣼⣮⣻⠿⢹⢻⡞⡘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀\n",
-              "⣿⡛⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣻⣟⣿⣿⣖⢓⣱⡕⢟⡵⠛⠲⠁⠀⠀⠀⠀⠀⠄⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠛⠀⠈⠻⠿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣯⣮⣳⣿⡙⢹⣿⣷⣧⠽⠉⠡⡒⠅⡀⠀⠀⠀⠀⠈⠀⠀⠀⠀⢀⠀⠀⠀⠀\n",
-              "⠀⠄⠀⠀⠀⠠⣬⣍⠉⢽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⣻⣟⠻⢿⣷⠤⢄⣀⡤⠒⠁⠐⡠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-              "⠀⠀⠀⢐⡄⢀⣫⣷⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣲⢶⣒⣂⣡⡴⢻⠅⠶⢊⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡆⠀\n",
-              "⠐⠂⠃⢠⣴⣯⡟⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣯⠘⠒⠈⢩⣥⣬⠀⠐⠐⢩⠀⠀⠀⠀⠂⠀⠀⠀⠀⠀⠀⠀⢠⠁⠀\n",
-              "⢂⣤⠲⢚⡵⢋⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣲⢫⣬⡬⣭⢖⡶⡏⣞⡼⠁⠀⠀⠀⠀⠀⠐⠀⠀⠀⡸⠀⠀\n",
-              "⣳⣈⢨⢕⣽⣟⣻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣹⣿⣿⣿⣿⣶⣿⣶⣿⣿⣿⠟⢀⡄⠀⠄⠀⠂⠔⠀⠀⠀⢀⠃⠀⠀\n",
-              "⣿⣿⣆⡚⢿⣿⣞⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⡫⣐⣜⠵⠢⢂⠠⠀⠁⠀⠀⠀⢀⠎⠀⠀⠀\n",
-              "⣿⣿⣿⣿⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣫⡽⠟⠻⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣽⣿⣿⣯⣴⡚⢛⠒⠀⡀⣀⣠⠥⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀\n",
-              "⣿⣿⣿⡿⣽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⣝⣻⣿⣿⣄⠐⣶⣤⡤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣾⣿⣶⠿⡛⠃⢀⠄⠀⠐⠀⠄⠀⠀⠀⠀⠀⢠\n",
-              "⣿⣿⣿⣿⣿⣿⡿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃⢀⡈⠳⢿⡿⠟⣡⣿⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣛⠛⠿⠯⠾⢛⣁⣠⣲⠀⢀⠁⠀⠀⠀⠀⠀⠀⢀⡴⠁\n",
-              "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⣴⣾⣿⣶⣦⣶⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣭⣀⣦⢨⣉⣥⣋⡤⠀⠂⠀⠀⠀⣀⠔⠋⠀⠀\n",
-              "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢿⠿⣻⢁⣧⣔⠦⠀⠀⠈⠀⠀⠀⠀⠀\n",
-              " R  E  S  O  N  A  N  T     D  E  P  O  L  A  R  I  S  A  T  I  O  N ")
+        print(
+            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⡀⠄⢀⠀⠀⠀⠀⠀⠀⠐⡀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠲⡀⠀⠀⠠⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠\n",
+            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠠⠑⢈⠐⠀⡀⠄⢀⡀⢀⠀⠁⠈⠀⠐⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠀⠀⠀⠐⠀⢉⠀⠀⠀⠀⠀⠀⠀⠂⠉⡄⠀⠠⠁⠘⠄⡂⢁⠀⡀⠀⠀⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠀⠀⠂⠠⠀⠠⠁⡐⠀⠀⠂⠀⠀⠁⠀⠀⠃⠄⠈⠂⠡⢄⠂⠐⠀⠂⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⠀⠀⠀⠙⢦⡀⠀⠐⠀⠀⠀⠀⠀⠂⠌⠀⠁⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠐⠀⠀⠀⠹⡮⠲⢔⣤⣤⡀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠈⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠳⣶⣿⣿⣿⣿⣷⣦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠀⠀⠀⠢⡀⠀⠀⠀⠀⠠⠀⠀⠀⡀⢄⢦⡝⢿⣿⣿⣿⣿⣿⣿⡿⠷⠖⠀⠐⠀⠀⠒⠤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠀⠀⠀⠀⠀⢤⣀⠀⠀⠀⠀⢄⡻⡟⠘⢼⣼⣿⣿⣿⣿⠿⠛⠀⠀⠀⡀⣀⣤⣿⣤⣤⣀⡀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠷⣶⡦⠔⠮⡟⠾⢶⣿⣿⡿⠛⠉⢀⠀⣀⣤⣲⣿⣿⣿⣿⣿⣿⣿⣿⣿⣡⡄⠀⢀⠢⢁⣟⣦⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡈⠛⢟⡿⠿⢧⣾⢝⡩⠂⣁⣤⣷⢿⣫⣿⣿⢿⣿⣿⣿⣿⣿⣷⣿⣿⡿⠆⠀⢸⠠⢿⢿⡯⣿⢷⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠘⢿⣶⣶⣤⣤⣴⣠⣤⣄⡉⣤⡘⠚⢈⡃⢩⣪⣿⣿⣟⣵⣿⣿⣿⣷⣿⣿⣿⣿⣿⡿⢦⣔⢒⣽⣿⡉⣋⣿⣽⣾⢒⡿⡛⣿⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⠈⠹⣿⣿⣿⣿⣿⣿⣿⣿⣾⣷⣾⣰⢲⣾⣿⣯⣾⣿⣿⣿⣿⡟⣥⢷⣶⣻⣿⣽⣾⣿⡇⠐⠻⠿⠿⠿⠿⠿⠁⠀⠟⠻⠙⣷⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⡀⠀\n",
+            "⣄⠀⠄⣀⠂⠐⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⣿⣿⣿⣿⣿⣿⣿⢫⣾⣷⡟⠿⣿⣿⠿⠛⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠂\n",
+            "⣿⣷⣴⣈⣻⣜⣘⡽⣮⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢣⣿⣿⣿⣿⠀⠈⠀⠀⠀⠀⠀⠀⠀⠰⢲⣶⣶⣶⣾⣷⣾⣶⠀⠀⠀⣰⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⣿⣿⣿⣿⣿⣿⣿⣽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⡿⣿⡿⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⡟⣾⡕⣝⣱⡏⠆⢐⡼⢿⣇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣤⠀⠀⣀⠀⠀⠀⠁⠀⠄⠀⠀⢀⠀⢸⡟⠾⠯⠙⠻⡔⢰⣣⣾⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⡕⠀⣼⣟⠰⠀⠀⠀⠀⠀⢀⣀⣠⣠⣀⠀⠶⣶⡶⣄⣀⢳⣯⢯⡹⣏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⣡⢠⣟⣛⣶⡂⠀⢰⣧⣼⣧⣀⠘⣷⢚⣻⣤⣿⣾⣿⣫⣻⣿⢌⣇⠌⠀⠀⠀⠀⠀⠀⠀⠀⣤⠀⠀⠀⠀\n",
+            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣷⣶⣿⣿⣿⣿⣦⣸⣿⣿⣿⣿⣶⣾⣿⣻⡟⣼⣮⣻⠿⢹⢻⡞⡘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀\n",
+            "⣿⡛⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣻⣟⣿⣿⣖⢓⣱⡕⢟⡵⠛⠲⠁⠀⠀⠀⠀⠀⠄⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠛⠀⠈⠻⠿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣯⣮⣳⣿⡙⢹⣿⣷⣧⠽⠉⠡⡒⠅⡀⠀⠀⠀⠀⠈⠀⠀⠀⠀⢀⠀⠀⠀⠀\n",
+            "⠀⠄⠀⠀⠀⠠⣬⣍⠉⢽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⣻⣟⠻⢿⣷⠤⢄⣀⡤⠒⠁⠐⡠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
+            "⠀⠀⠀⢐⡄⢀⣫⣷⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣲⢶⣒⣂⣡⡴⢻⠅⠶⢊⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡆⠀\n",
+            "⠐⠂⠃⢠⣴⣯⡟⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣯⠘⠒⠈⢩⣥⣬⠀⠐⠐⢩⠀⠀⠀⠀⠂⠀⠀⠀⠀⠀⠀⠀⢠⠁⠀\n",
+            "⢂⣤⠲⢚⡵⢋⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣲⢫⣬⡬⣭⢖⡶⡏⣞⡼⠁⠀⠀⠀⠀⠀⠐⠀⠀⠀⡸⠀⠀\n",
+            "⣳⣈⢨⢕⣽⣟⣻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣹⣿⣿⣿⣿⣶⣿⣶⣿⣿⣿⠟⢀⡄⠀⠄⠀⠂⠔⠀⠀⠀⢀⠃⠀⠀\n",
+            "⣿⣿⣆⡚⢿⣿⣞⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⡫⣐⣜⠵⠢⢂⠠⠀⠁⠀⠀⠀⢀⠎⠀⠀⠀\n",
+            "⣿⣿⣿⣿⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣫⡽⠟⠻⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣽⣿⣿⣯⣴⡚⢛⠒⠀⡀⣀⣠⠥⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀\n",
+            "⣿⣿⣿⡿⣽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⣝⣻⣿⣿⣄⠐⣶⣤⡤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣾⣿⣶⠿⡛⠃⢀⠄⠀⠐⠀⠄⠀⠀⠀⠀⠀⢠\n",
+            "⣿⣿⣿⣿⣿⣿⡿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃⢀⡈⠳⢿⡿⠟⣡⣿⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣛⠛⠿⠯⠾⢛⣁⣠⣲⠀⢀⠁⠀⠀⠀⠀⠀⠀⢀⡴⠁\n",
+            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⣴⣾⣿⣶⣦⣶⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣭⣀⣦⢨⣉⣥⣋⡤⠀⠂⠀⠀⠀⣀⠔⠋⠀⠀\n",
+            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢿⠿⣻⢁⣧⣔⠦⠀⠀⠈⠀⠀⠀⠀⠀\n",
+            "R  E  S  O  N  A  N  T     D  E  P  O  L  A  R  I  S  A  T  I  O  N ",
+        )
 
         # perpetual GUI settings
         QCoreApplication.setOrganizationName("Physics")
         QCoreApplication.setApplicationName("Resonant Depolarisation (simple)")
 
-        # --- Resonant Depolarisation module
+        #-------------------------------------------------------------------------- Resonant Depolarisation module
         # import
         self.resdep = ResonantDepolarisation()
         # define thread for resdep
@@ -133,12 +135,16 @@ class MainWindow(QWidget):
 
         # helper classes
         self.processed_data = ProcessedData(resdep=self.resdep)
-        self.fitting        = FittingClass(resdep=self.resdep, processed_data=self.processed_data)
+        self.fitting = FittingClass(
+            resdep=self.resdep, processed_data=self.processed_data
+        )
 
         # init window
         self.setWindowTitle("Resonant Depolarisation")
         self.setMinimumWidth(400)
-        mainwindow_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarMenuButton)
+        mainwindow_icon = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_TitleBarMenuButton
+        )
         self.setWindowIcon(mainwindow_icon)
 
         # create an layout for the whole window
@@ -169,8 +175,8 @@ class MainWindow(QWidget):
         main_window_layout = QVBoxLayout()
         self.setLayout(main_window_layout)
 
-        # --- app title / banner
-        self.app_title      = QLabel("Resonant Depolarisation")
+        #-------------------------------------------------------------------------- app title / banner
+        self.app_title = QLabel("Resonant Depolarisation")
         self.app_title.setStyleSheet(
             """
             background-color: transparent;
@@ -180,7 +186,7 @@ class MainWindow(QWidget):
             letter-spacing: 2px;
             """
         )
-        self.app_subtitle   = QLabel("beam energy diagnostic")
+        self.app_subtitle = QLabel("beam energy diagnostic")
         self.app_subtitle.setStyleSheet(
             """
             background-color: transparent;
@@ -190,7 +196,8 @@ class MainWindow(QWidget):
             """
         )
 
-        # --- top panel (results / stats LHS (first place you look), buttons / control RHS)
+        #-------------------------------------------------------------------------- top panel (results / stats LHS (first place you look))
+        # (buttons / control RHS)
         top_panel = QWidget(self)
         top_panel_layout = QHBoxLayout()
         top_panel.setLayout(top_panel_layout)
@@ -201,8 +208,8 @@ class MainWindow(QWidget):
         # add everything to top panel
         top_panel_layout.addWidget(self.results_panel_frame)
         top_panel_layout.addWidget(self.control_panel)
-        
-        # --- status bar
+
+        #-------------------------------------------------------------------------- status bar
         self.progress_bar = QProgressBar(self)
         self.progress_bar.setMaximum(self.resdep.sweep_steps)
 
@@ -211,8 +218,12 @@ class MainWindow(QWidget):
         self.on_status_update("Ready")
 
         # add everything to window
-        main_window_layout.addWidget(self.app_title, alignment=Qt.AlignmentFlag.AlignCenter)
-        main_window_layout.addWidget(self.app_subtitle, alignment=Qt.AlignmentFlag.AlignCenter)
+        main_window_layout.addWidget(
+            self.app_title, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+        main_window_layout.addWidget(
+            self.app_subtitle, alignment=Qt.AlignmentFlag.AlignCenter
+        )
         main_window_layout.addWidget(top_panel)
         main_window_layout.addWidget(self.progress_bar)
         main_window_layout.addWidget(self.status_bar)
@@ -222,25 +233,29 @@ class MainWindow(QWidget):
         self._running_experiment = False
         self.automatic_scan_timer = QTimer(self)
         self.automatic_scan_timer.setInterval(1000)
-        self.automatic_scan_timer.timeout.connect(self.update_automatic_scan_timer)
+        self.automatic_scan_timer.timeout.connect(
+            self.update_automatic_scan_timer
+        )
 
         self.config_logger()
 
         self.show()
 
     # *--------------------------------* #
-	# *---------- GUI Layout ----------* #
-	# *--------------------------------* # 
-    def _init_results_panel(self, ) -> None:
+    # *---------- GUI Layout ----------* #
+    # *--------------------------------* #
+    def _init_results_panel(
+        self,
+    ) -> None:
         """
         Results panel, LHS of GUI. \\
         Lists beam energy, fit stats, repolarisation time, etc.
         """
         # icons
         dir_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
-        # --- results / stats panel
+        #-------------------------------------------------------------------------- results / stats panel
         results_panel_layout = QVBoxLayout()
-         # frame around manual button
+        # frame around manual button
         self.results_panel_frame = QFrame(self)
         self.results_panel_frame.setFrameShape(QFrame.Shape.Panel)
         self.results_panel_frame.setLayout(results_panel_layout)
@@ -254,30 +269,38 @@ class MainWindow(QWidget):
             """
         )
 
-        results_form        = QWidget()
+        results_form = QWidget()
         results_form_layout = QFormLayout()
         results_form.setLayout(results_form_layout)
-        
-        self.beam_energy_label          = QLabel()
-        self.repolarisation_time_label  = QLabel()
-        self.polarisation_label         = QLabel()
 
-        self.polarisation       : float = 100   # %
-        self.repolarisation_time: int   = 0     # seconds. 3 tpol -> 39 minutes (88 %)
-        self.repolarisation_time_label  = QLabel("")
-        self.repolarisation_timer       = QTimer(self)
+        self.beam_energy_label = QLabel()
+        self.repolarisation_time_label = QLabel()
+        self.polarisation_label = QLabel()
+
+        self.polarisation: float = 100  # %
+        self.repolarisation_time: int = (
+            0  # seconds. 3 tpol -> 39 minutes (88 %)
+        )
+        self.repolarisation_time_label = QLabel("")
+        self.repolarisation_timer = QTimer(self)
         self.repolarisation_timer.setInterval(1000)
-        self.repolarisation_timer.timeout.connect(self.update_repolarisation_time)
+        self.repolarisation_timer.timeout.connect(
+            self.update_repolarisation_time
+        )
 
         self.automatic_scan_countdown_label = QLabel("")
-        self.error_label                    = QLabel("")
+        self.error_label = QLabel("")
         self.error_label.setStyleSheet("color:red")
         self.error_label.setWordWrap(True)
 
         results_form_layout.addRow("Beam Energy:", self.beam_energy_label)
-        results_form_layout.addRow("Repolarisation time:", self.repolarisation_time_label)
+        results_form_layout.addRow(
+            "Repolarisation time:", self.repolarisation_time_label
+        )
         results_form_layout.addRow("Polarisation:", self.polarisation_label)
-        results_form_layout.addRow("Next scan in:", self.automatic_scan_countdown_label)
+        results_form_layout.addRow(
+            "Next scan in:", self.automatic_scan_countdown_label
+        )
         results_form_layout.addRow("Errors:", self.error_label)
 
         # temporary data path
@@ -286,24 +309,30 @@ class MainWindow(QWidget):
         try:
             hostname.index("OPI")
             self.data_path = Path("/asp/usr/data/resdep")
-        except ValueError: # not running on AS OPI
-            Path.mkdir(self.data_path/"GUI_log", exist_ok=True) # does not wipe the dir if it exists, just continues
+        except ValueError:  # not running on AS OPI
+            Path.mkdir(
+                self.data_path / "GUI_log", exist_ok=True
+            )  # does not wipe the dir if it exists, just continues
             pass
-        self.logfile_path = Path(self.data_path/"GUI_log")
+        self.logfile_path = Path(self.data_path / "GUI_log")
 
         self.button_data_path = QPushButton("Data")
         self.button_data_path.setIcon(dir_icon)
         # button callbacks
         self.button_data_path.clicked.connect(self.open_data_path)
-        
-        results_panel_layout.addWidget(results_panel_header, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        results_panel_layout.addWidget(
+            results_panel_header, alignment=Qt.AlignmentFlag.AlignCenter
+        )
         results_panel_layout.addWidget(results_form)
         results_panel_layout.addStretch()
         results_panel_layout.addWidget(self.button_data_path)
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def _init_control_panel(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def _init_control_panel(
+        self,
+    ) -> None:
         """
         Control panel, RHS of GUI \\
         Contains buttons for automatic operation, and manual (normal / long) scans
@@ -313,7 +342,7 @@ class MainWindow(QWidget):
         control_panel_layout = QVBoxLayout()
         self.control_panel.setLayout(control_panel_layout)
 
-        # --- Automatic button panel
+        #-------------------------------------------------------------------------- Automatic button panel
         automatic_button_panel_layout = QVBoxLayout()
         # frame around automatic button
         automatic_button_panel_frame = QFrame(self)
@@ -338,15 +367,22 @@ class MainWindow(QWidget):
         automatic_form = QWidget()
         automatic_form_layout = QFormLayout()
         automatic_form.setLayout(automatic_form_layout)
-        self.time_between_automatic_scans = QDoubleSpinBox(minimum=0.65, value=1, singleStep=0.01, decimals=2, suffix=" hours")
-        automatic_form_layout.addRow("Time between scans:\n(end to start)", self.time_between_automatic_scans)
+        self.time_between_automatic_scans = QDoubleSpinBox(
+            minimum=1, value=1, singleStep=0.1, decimals=2, suffix=" hours"
+        )
+        automatic_form_layout.addRow(
+            "Time between scans:\n(end to start)",
+            self.time_between_automatic_scans,
+        )
 
         # add to panel
-        automatic_button_panel_layout.addWidget(automatic_button_header, alignment=Qt.AlignmentFlag.AlignCenter)
+        automatic_button_panel_layout.addWidget(
+            automatic_button_header, alignment=Qt.AlignmentFlag.AlignCenter
+        )
         automatic_button_panel_layout.addWidget(self.button_automatic)
         automatic_button_panel_layout.addWidget(automatic_form)
-        
-        # --- manual button panel
+
+        #-------------------------------------------------------------------------- manual button panel
         manual_button_panel_layout = QVBoxLayout()
         # frame around manual button
         manual_button_panel_frame = QFrame()
@@ -363,27 +399,45 @@ class MainWindow(QWidget):
         )
 
         # manual buttons
-        self.button_manual_normal_scan  = QPushButton("Normal Scan")
-        self.button_manual_wide_search  = QPushButton("Wide Search")
+        self.button_manual_normal_scan = QPushButton("Normal Scan")
+        self.button_manual_wide_search = QPushButton("Wide Search")
 
         # button callbacks
         self.button_automatic.clicked.connect(self.on_automatic_scan_clicked)
-        self.button_manual_normal_scan.clicked.connect(self.on_normal_scan_clicked)
-        self.button_manual_wide_search.clicked.connect(self.on_wide_search_clicked)
-        
+        self.button_manual_normal_scan.clicked.connect(
+            self.on_normal_scan_clicked
+        )
+        self.button_manual_wide_search.clicked.connect(
+            self.on_wide_search_clicked
+        )
+
         # machine studies mode (override checks) checkbox
-        self.checkbox_machine_studies = QCheckBox("Machine Studies (override)")
+        self.checkbox_machine_studies = QCheckBox("Machine Studies")
+        self.checkbox_machine_state_override = QCheckBox(
+            "Override machine state checks"
+        )
 
         # add to manual panel
-        manual_button_panel_layout.addWidget(manual_button_header, alignment=Qt.AlignmentFlag.AlignCenter)
+        manual_button_panel_layout.addWidget(
+            manual_button_header, alignment=Qt.AlignmentFlag.AlignCenter
+        )
         manual_button_panel_layout.addWidget(self.button_manual_normal_scan)
         manual_button_panel_layout.addWidget(self.button_manual_wide_search)
-        manual_button_panel_layout.addWidget(self.checkbox_machine_studies, alignment=Qt.AlignmentFlag.AlignCenter)
+        manual_button_panel_layout.addWidget(
+            self.checkbox_machine_studies,
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+        manual_button_panel_layout.addWidget(
+            self.checkbox_machine_state_override,
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
 
         # abort button
         self.button_abort = QPushButton("ABORT!")
         self.button_abort.setFixedSize(100, 60)
-        # self.button_abort.setStyleSheet("QPushButton {background-color: red;}")
+        # self.button_abort.setStyleSheet(
+        #   "QPushButton {background-color: red;}"
+        # )
         self.button_abort.setEnabled(False)
         self.button_abort.clicked.connect(self.abort)
 
@@ -391,73 +445,86 @@ class MainWindow(QWidget):
         control_panel_layout.addWidget(automatic_button_panel_frame)
         control_panel_layout.addSpacing(50)
         control_panel_layout.addWidget(manual_button_panel_frame)
-        control_panel_layout.addWidget(self.button_abort, alignment=Qt.AlignmentFlag.AlignCenter)
+        control_panel_layout.addWidget(
+            self.button_abort, alignment=Qt.AlignmentFlag.AlignCenter
+        )
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def config_logger(self, ) -> None:
-        """Configure the logger to write to console and logfile
-        """
-        self.start_time = datetime.datetime.now()
-        date_str 		= self.start_time.strftime("%Y-%m-%d")
-        hours_str 		= self.start_time.strftime("%H%Mh")
-        seconds_str 	= self.start_time.strftime("%Ss")
-        filename: str   = f"logfile_{date_str}_{hours_str}-{seconds_str}.log"
+    #--------------------------------------------------------------------------
+    def config_logger(
+        self,
+    ) -> None:
+        """Configure the logger to write to console and logfile"""
+        pass
+        # self.start_time = datetime.datetime.now()
+        # date_str 		= self.start_time.strftime("%Y-%m-%d")
+        # hours_str 		= self.start_time.strftime("%H%Mh")
+        # seconds_str 	= self.start_time.strftime("%Ss")
+        # filename: str   = f"logfile_{date_str}_{hours_str}-{seconds_str}.log"
 
-        logger_format = "%(asctime)s - %(levelname)s - %(message)s"
-        file_logger = logging.getLogger("")
-        logging.basicConfig(level=logging.DEBUG,
-                            format=logger_format,
-                            filename=self.logfile_path / filename,
-                            filemode='w')
-        # Until here logs only to file: 'logfile'
-        # define a new Handler to log to console as well
-        console_logger = logging.StreamHandler()
-        # optional, set the logging level
-        console_logger.setLevel(logging.INFO)
-        # set a format which is the same for console use
-        formatter = logging.Formatter(logger_format)
-        # tell the handler to use this format
-        console_logger.setFormatter(formatter)
-        # add the handler to the root logger
-        file_logger.addHandler(console_logger)
+        # logger_format = "%(asctime)s - %(levelname)s - %(message)s"
+        # file_logger = logging.getLogger("")
+        # logging.basicConfig(level=logging.DEBUG,
+        #                     format=logger_format,
+        #                     filename=self.logfile_path / filename,
+        #                     filemode='w')
+        # # Until here logs only to file: 'logfile'
+        # # define a new Handler to log to console as well
+        # console_logger = logging.StreamHandler()
+        # # optional, set the logging level
+        # console_logger.setLevel(logging.INFO)
+        # # set a format which is the same for console use
+        # formatter = logging.Formatter(logger_format)
+        # # tell the handler to use this format
+        # console_logger.setFormatter(formatter)
+        # # add the handler to the root logger
+        # file_logger.addHandler(console_logger)
 
-        logging.debug(self.start_time)
-        logging.debug("--- simpleGUI starting up ---")
+        # logging.debug(self.start_time)
+        # logging.debug("--- simpleGUI starting up ---")
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def enable_abort_button(self, enable: bool = True) -> None:
         """
-        Enables / disables abort button and changes color to red when experiment is running or automatic scans enabled. 
+        Enables / disables abort button and changes color to red when experiment is running or automatic scans enabled.
         """
         if enable:
             self.button_abort.setEnabled(True)
-            self.button_abort.setStyleSheet("QPushButton {background-color: red;}")
+            self.button_abort.setStyleSheet(
+                "QPushButton {background-color: red;}"
+            )
         else:
             self.button_abort.setEnabled(False)
-            self.button_abort.setStyleSheet("QPushButton {background-color: none;}")
+            self.button_abort.setStyleSheet(
+                "QPushButton {background-color: none;}"
+            )
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def disable_abort_button(self,) -> None:
+    #--------------------------------------------------------------------------
+    def disable_abort_button(
+        self,
+    ) -> None:
         """
         Alias for `enable_abort_button(enable=False)`
         """
         self.enable_abort_button(enable=False)
         return None
     # *--------------------------------* #
-	# *---------- Experiment ----------* #
-	# *--------------------------------* # 
-    def run_experiment(self, ) -> None:
+    # *---------- Experiment ----------* #
+    # *--------------------------------* #
+    def run_experiment(
+        self,
+    ) -> None:
         """
         Executes the resdep experiment in a separate thread. \\
         resdep is wrapped in a worker class that attaches emitted progress, status, and plot updates (info)
         """
 
         # disable appropriate buttons
-        # 
-        #  
+        #
+        #
         # enable abort button (and turn red)
+        self._abort_requested = False
         self.enable_abort_button()
         # update status bar
         self.on_status_update("Starting up...")
@@ -465,13 +532,13 @@ class MainWindow(QWidget):
         # update progress bar
         self.resdep.calculate_range()
         self.progress_bar.setMaximum(self.resdep.sweep_steps)
-            
+
         # call resdep
         self._running_experiment = True
         self.thread_manager.start(self.resdepQt.run)
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def on_progress_update(self, step: int) -> None:
         """
         Simply update the value of the progress bar \\
@@ -480,31 +547,34 @@ class MainWindow(QWidget):
         self.progress_bar.setValue(step)
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def on_status_update(self, message) -> None:
         """
         Updates the GUI statues (primarily from running to sleeping on injection)
         """
         self.status_bar.showMessage(f"Status: {message}")
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def on_data_path_update(self, data_path: Path) -> None:
         """
         Assign data path from resdep to GUI button.
         """
         self.data_path = data_path
         self.button_data_path.setEnabled(True)
-        
+
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def on_finish(self,) -> None:
+    #--------------------------------------------------------------------------
+    def on_finish(
+        self,
+    ) -> None:
         """
-        Update states, buttons, progress bar. \\
-        Perform data analysis (automagic fit) \\
-        Write fit results to GUI (and PV?) \\
+        Update states, buttons, progress bar. Perform data analysis (automagic fit).
+        Write fit results to GUI (and PV?).
         Start timers for repolarisation and countdown to next scan (if automatic scans enabled).
         """
-        self.on_status_update("Experiment finished. Performing data analysis...")
+        self.on_status_update(
+            "Experiment finished. Performing data analysis..."
+        )
 
         # reset state
         self._running_experiment = False
@@ -512,10 +582,11 @@ class MainWindow(QWidget):
         self.disable_abort_button()
 
         # re-enable appropriate buttons
+        self.button_automatic.setEnabled(True)
 
         # make sure progress bar reads 100%
-        self.progress_bar.setValue(100)
         self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(100)
 
         if not self._abort_requested:
             self.fit_beam_energy()
@@ -533,20 +604,28 @@ class MainWindow(QWidget):
             self._abort_requested = False
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def start_automatic_scan_countdown(self, ) -> None:
-            # update countdown duration from GUI input
-            self.automatic_scan_countdown = int(self.time_between_automatic_scans.value() * 3600)
-            self.automatic_scan_timer.start()
-            return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def update_automatic_scan_timer(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def start_automatic_scan_countdown(
+        self,
+    ) -> None:
+        # update countdown duration from GUI input
+        self.automatic_scan_countdown = int(
+            self.time_between_automatic_scans.value() * 3600
+        )
+        self.automatic_scan_timer.start()
+        return None
+    #--------------------------------------------------------------------------
+    def update_automatic_scan_timer(
+        self,
+    ) -> None:
         """
         Use QTimer to countdown and trigger the next automatic scan.
         """
         self.automatic_scan_countdown += -1
-        self.automatic_scan_countdown_label.setText(f"{datetime.timedelta(seconds=self.automatic_scan_countdown)}")
-        
+        self.automatic_scan_countdown_label.setText(
+            f"{datetime.timedelta(seconds=self.automatic_scan_countdown)}"
+        )
+
         if not self._automatic_scan_enabled:
             self.automatic_scan_timer.stop()
             self.automatic_scan_countdown = self.automatic_scan_countdown
@@ -555,10 +634,12 @@ class MainWindow(QWidget):
         elif self.automatic_scan_countdown <= 0:
             self.automatic_scan_timer.stop()
             self.automatic_scan()
-        
+
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def update_repolarisation_time(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def update_repolarisation_time(
+        self,
+    ) -> None:
         """
         Calculate time spent repolarising the beam after experiment end. \\ 
         Ideal wait time: (3 tpol, 39 min, 88%) \\ 
@@ -566,13 +647,15 @@ class MainWindow(QWidget):
         Stop after enough time (~2 hours)
         """
         self.repolarisation_time += 1
-        repolarisation_timedelta = datetime.timedelta(seconds=self.repolarisation_time)
+        repolarisation_timedelta = datetime.timedelta(
+            seconds=self.repolarisation_time
+        )
         self.repolarisation_time_label.setText(f"{repolarisation_timedelta}")
 
         # self.polarisation = 92.38*(1-np.exp(-self.repolarisation_time/779))
-        self.polarisation = 100*(1-np.exp(-self.repolarisation_time/779))
+        self.polarisation = 100 * (1 - np.exp(-self.repolarisation_time / 779))
         self.polarisation_label.setText(f"{self.polarisation:0.2f}%")
-            
+
         if self._running_experiment:
             self.repolarisation_timer.stop()
             self.repolarisation_time_label.setText("--> 0%")
@@ -582,19 +665,24 @@ class MainWindow(QWidget):
             self.repolarisation_timer.stop()
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def fit_beam_energy(self, ) -> None:
-        """Calls magic fitting functions from [`_fitting`][resdep._fitting] to extract beam energy from data.
-        """
-        error=None
+    #--------------------------------------------------------------------------
+    def fit_beam_energy(
+        self,
+    ) -> None:
+        """Calls magic fitting functions from [`_fitting`][resdep._fitting] to extract beam energy from data."""
+        error = None
         fitted_beam_energy_string = ""
 
-        try: # try block so GUI doesn't crash
+        try:  # try block so GUI doesn't crash
             self.processed_data.calculate_ratio_loss(sigma=200, bin=True)
 
-            _, _, fitted_beam_energy_string, error = self.fitting.automagic_fit()
+            _, _, fitted_beam_energy_string, error = (
+                self.fitting.automagic_fit()
+            )
 
-        except Exception: # Catch something critical that `automagic_fit()` does not handle
+        except (
+            Exception
+        ):  # Catch something critical that `automagic_fit()` does not handle
             error = traceback.format_exc()
             logging.error(error)
 
@@ -604,13 +692,15 @@ class MainWindow(QWidget):
                 self.error_label.setText(error)
             else:
                 self.beam_energy_label.setText(fitted_beam_energy_string)
-        
+
         # TODO: write to PV????
         # beam_energy_PV.put(E0_mean_sigfig)
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def check_if_experiment_can_run(self, scan_type: Literal["automatic", "manual"]) -> tuple[bool, str]:
+    #--------------------------------------------------------------------------
+    def check_able_to_run(
+        self, scan_type: Literal["automatic", "manual"]
+    ) -> tuple[bool, str]:
         """
         Check if the experiment can run based on the state of the machine \\
 
@@ -635,14 +725,14 @@ class MainWindow(QWidget):
         3. Must be in "User Beam" if automatic scans are enabled
         """
         verdict: bool = False
-        error  : str  = "No error"
+        error: str = "No error"
 
         self.error_label.setText("")
 
-        if self.checkbox_machine_studies.isChecked():
+        if self.checkbox_machine_state_override.isChecked():
             verdict = True
             return verdict, error
-        
+
         # If not connected/disconnected, give PVs a chance to reconnect before state check logic
         for pv in [self.beam_mode_PV, self.current_PV]:
             if not pv.connected:
@@ -650,10 +740,11 @@ class MainWindow(QWidget):
                 time.sleep(1)
             # if still not connected, fail
             if not pv.connected:
-                error = f"{pv} refused to connect. Cannot determine machine state."
+                error = (
+                    f"{pv} refused to connect. Cannot determine machine state."
+                )
                 logging.warning(error)
                 return False, error
-                
 
         beam_mode: Union[int, None] = self.beam_mode_PV.get(timeout=0.1)
         current: Union[float, None] = self.current_PV.get(timeout=0.1)
@@ -661,101 +752,145 @@ class MainWindow(QWidget):
 
         # if PVs return None, exit early
         if beam_mode is None:
-            error = f"beam_mode (FS01:BEAM_MODE_MONITOR) returned None. Expected any of:\n{self.beam_modes}\nAborting request to run resdep."
+            error = (
+                "beam_mode (FS01:BEAM_MODE_MONITOR) returned None." 
+                + f"Expected any of:\n{self.beam_modes}\n" 
+                +"Aborting request to run resdep."
+            )
             logging.warning(error)
             return False, error
-        
+
         if current is None:
-            error = "Current PV (DCCT) returned None.\nAborting request to run resdep."
+            error = (
+                "Current PV (DCCT) returned None.\n" 
+                + "Aborting request to run resdep."
+            )
             logging.warning(error)
             return False, error
 
         # Assume can run, else check for errors
         scan_type_specific_requirements = [
-            scan_type == "automatic" and beam_mode >= 8, # all user beam modes
-            scan_type == "manual" # manual scans can run anytime
+            scan_type == "automatic"
+            and (
+                beam_mode >= 8 or self.checkbox_machine_studies.isChecked()
+            ),  # all user beam modes
+            scan_type == "manual",  # manual scans can run anytime
         ]
-        recent_beam_injection = check_for_recent_beam_injection()
+        recent_beam_injection = check_recent_beam_injection()
 
-        if all([
-            any(scan_type_specific_requirements),
-            current             >= 150, # mA. More current = more resolution. Should ideally run at 200 mA
-            self.polarisation   >= 95,   # %
-            not recent_beam_injection
-        ]):
+        if all(
+            [
+                any(scan_type_specific_requirements),
+                current >= 150,             # mA. 
+                # More current = more resolution. Should ideally run at 200 mA
+                self.polarisation >= 95,    # %
+                not recent_beam_injection,
+            ]
+        ):
             verdict = True
-        elif current < 150: # mA
-            error = f"Less than 150 mA beam current.\n{current:0.0f} mA is not enough resolution for measurement.\nAborting request to run resdep."
+        elif current < 150:  # mA
+            error = (
+                "Less than 150 mA beam current.\n" 
+                + f"{current:0.0f} mA is not enough resolution for measurement.\n" 
+                + "Aborting request to run resdep."
+            )
             logging.warning(error)
             return False, error
-        elif self.polarisation < 95: # %
-            error = "Beam polarisation is less than 95%; not enough resolution.\nAborting request to run resdep."
+        elif self.polarisation < 95:  # %
+            error = (
+                "Beam polarisation is less than 95%; not enough resolution.\n"
+                + "Aborting request to run resdep."
+            )
             logging.warning(error)
             return False, error
         elif recent_beam_injection:
-            error = "Beam has been injected too recently and has not have enought time to polarise (requires at least 39 minutes)."
+            error = (
+                "Beam has been injected too recently and has not have enough" 
+                + "time to polarise (requires at least 39 minutes)."
+            )
             logging.warning(error)
             return False, error
-        elif scan_type == "automatic" and beam_mode < 8: # not "User Beam" in automatic mode
-            error = f"beam_mode (FS01:BEAM_MODE_MONITOR) returned \"{self.beam_modes[beam_mode]}\". Expected any form of 'User Beam'.\nAborting request to run resdep."
+        elif (
+            scan_type == "automatic"
+            and beam_mode < 8
+            and not self.checkbox_machine_studies.isChecked()
+        ):  # not "User Beam" in automatic mode
+            error = ("beam_mode (FS01:BEAM_MODE_MONITOR) returned " 
+                     + f"\"{self.beam_modes[beam_mode]}\".\n" 
+                     + "Expected any form of 'User Beam'.\n" 
+                     + "Aborting request to run resdep.")
             logging.warning(error)
             return False, error
-        
-        return verdict, error 
+
+        return verdict, error
     # *--------------------------------* #
-	# *---------- Scan Types ----------* #
-	# *--------------------------------* #
-    def automatic_scan(self, ) -> None:
+    # *---------- Scan Types ----------* #
+    # *--------------------------------* #
+    def automatic_scan(
+        self,
+    ) -> None:
         """
         Automatically runs resdep every hour using countdown timer \\
         """
-        able_to_run_experiment, error = self.check_if_experiment_can_run(scan_type="automatic")
+        able_to_run, error = self.check_able_to_run(scan_type="automatic")
 
-        if able_to_run_experiment:
+        if able_to_run:
             self.apply_default_scan_settings()
             self.run_experiment()
         else:
             self.error_label.setText(error)
             self.start_automatic_scan_countdown()
-        
+
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def normal_scan(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def normal_scan(
+        self,
+    ) -> None:
         """
         Runs a typical beam energy scan. \\ 
         No different to automatic_scan, just manually triggered.
         """
-        
-        able_to_run_experiment, error = self.check_if_experiment_can_run(scan_type="manual")
 
-        if able_to_run_experiment:
+        able_to_run, error = self.check_able_to_run(
+            scan_type="manual"
+        )
+
+        if able_to_run:
             self.apply_default_scan_settings()
             self.run_experiment()
         else:
             QMessageBox.critical(self, "Error", f"{error}")
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def wide_search(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def wide_search(
+        self,
+    ) -> None:
         """
         Runs a wide search for the beam energy (2 hour long scan, 0.35% of beam energy [3.02, 3.04] GeV) \\
         **WARNING**: If betatron tunes are off and within scan range, kicker will drive tunes.
         """
 
-        able_to_run_experiment, error = self.check_if_experiment_can_run(scan_type="manual")
+        able_to_run, error = self.check_able_to_run(
+            scan_type="manual"
+        )
 
-        if able_to_run_experiment:
+        if able_to_run:
             answer = QMessageBox.question(
-                self, 
-                "Continue?", 
-                "WARNING: May drive betatron tunes if they're off.\nDANGER ZONE: v_y = [0.097, 0.145] and v_y = [0.855, 0.903].\nContinue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                self,
+                "Continue?",
+                ("WARNING: May drive betatron tunes if they're off." 
+                 +"\nDANGER ZONE: "
+                 + "v_y = [0.097, 0.145] and v_y = [0.855, 0.903].\n" 
+                 +"Continue?"
+                 ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             # if yes
             if answer == QMessageBox.StandardButton.Yes:
                 self.close()
-                self.resdep.bounds 	    = 0.35/100	# 2 hour scan
-                self.resdep.sweep_rate  = 10	    # Hz/s
+                self.resdep.bounds = 0.35 / 100  # 2 hour scan
+                self.resdep.sweep_rate = 10  # Hz/s
                 self.run_experiment()
             else:
                 self.close()
@@ -763,70 +898,88 @@ class MainWindow(QWidget):
         else:
             QMessageBox.critical(self, "Error", f"{error}")
 
-
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def apply_default_scan_settings(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def apply_default_scan_settings(
+        self,
+    ) -> None:
         """
         Default resdep scan settings for normal and automatic
         """
-        # --- exp variables
-        self.resdep.bounds 	    = 0.05/100	# input %, output decimal
-        self.resdep.sweep_rate  = 5	        # Hz/s
-        
+        #-------------------------------------------------------------------------- exp variables
+        self.resdep.bounds = 0.05 / 100  # input %, output decimal
+        self.resdep.sweep_rate = 5  # Hz/s
+        if self.checkbox_machine_studies.isChecked():
+            self.resdep._measuring_MX3 = True
     # *--------------------------------* #
-	# *------ Button Callbacks --------* #
-	# *--------------------------------* #
-    def on_automatic_scan_clicked(self, ) -> None:
+    # *------ Button Callbacks --------* #
+    # *--------------------------------* #
+    def on_automatic_scan_clicked(
+        self,
+    ) -> None:
         """
-        Toggles states on button click. 
+        Toggles states on button click.
         If enabled -> calls automatic_scan().
         If disabled -> stops countown, asks to abort experiment.
         """
         if self.button_automatic.isChecked():
             self.button_automatic.setText("Enabled")
-            self.button_automatic.setStyleSheet("QPushButton {background-color: orange;}")
+            self.button_automatic.setStyleSheet(
+                "QPushButton {background-color: orange;}"
+            )
             self.on_status_update("Waiting for next automatic scan...")
             self._automatic_scan_enabled = True
             self.apply_default_scan_settings()
             self.automatic_scan()
 
-        else: # if unchecked
+        else:  # if unchecked
             self.button_automatic.setText("Disabled")
-            self.button_automatic.setStyleSheet("QPushButton {background-color: none;}")
+            self.button_automatic.setStyleSheet(
+                "QPushButton {background-color: none;}"
+            )
             self._automatic_scan_enabled = False
             if self._running_experiment:
                 answer = QMessageBox.question(
-                    self, 
-                    "Abort experiment?", 
+                    self,
+                    "Abort experiment?",
                     "Diagnostic is still running. Do you want to abort it?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No,
                 )
 
                 if answer == QMessageBox.StandardButton.Yes:
-                    self.resdepQt.abort()
-                    self.on_status_update("Waiting for experiment to finish...")
+                    self.abort()
+                    self.on_status_update(
+                        "Waiting for experiment to finish..."
+                    )
                     while self._running_experiment:
                         time.sleep(0.01)
 
-            else: # if experiment is not running
+                if answer == QMessageBox.StandardButton.No:
+                    self.button_automatic.setEnabled(False)
+
+            else:  # if experiment is not running
                 self.on_status_update("Ready")
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def on_normal_scan_clicked(self, ) -> None:
-        """
-        """
+    #--------------------------------------------------------------------------
+    def on_normal_scan_clicked(
+        self,
+    ) -> None:
+        """ """
         pass
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def on_wide_search_clicked(self, ) -> None:
-        """
-        """
+    #--------------------------------------------------------------------------
+    def on_wide_search_clicked(
+        self,
+    ) -> None:
+        """ """
         pass
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def open_data_path(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def open_data_path(
+        self,
+    ) -> None:
         """
         Opens data folder on any OS
         """
@@ -839,10 +992,12 @@ class MainWindow(QWidget):
         # Linux
         else:
             subprocess.call(("xdg-open", self.data_path))
-        
+
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def abort(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def abort(
+        self,
+    ) -> None:
         """
         Interrupts resdep experiment loop.
         """
@@ -854,61 +1009,82 @@ class MainWindow(QWidget):
     # *--------------------------------* #
     # *------------- EPICS ------------* #
     # *--------------------------------* #
-    def load_state_PVs(self, ) -> None:
+    def load_state_PVs(
+        self,
+    ) -> None:
         """
-        Loads PVs that track the current state of the beam. \\
-        These are used to determine whether resdep is allowed to run. \\
+        Loads PVs that track the current state of the beam.
+        These are used to determine whether resdep is allowed to run.
         Provides safeguards and automatic disabling of automatic scans.
         """
-        # --- Beam Mode --- #
+        #-------------------------------------------------------------------------- Beam Mode --- #
         self.beam_modes = {
-            1:  "Shut down",
-            2:  "Maintenance",
-            3:  "Machine studies",
-            8:  "UserBeam Decay",
-            9:  "UserBeam Top Up",
-            10: "UserBeam Exotic"
+            1: "Shut down",
+            2: "Maintenance",
+            3: "Machine studies",
+            8: "UserBeam Decay",
+            9: "UserBeam Top Up",
+            10: "UserBeam Exotic",
         }
 
-        self.beam_mode_PV = epics.pv.get_pv("FS01:BEAM_MODE_MONITOR", connect=True, timeout=1)
-        self.current_PV = epics.pv.get_pv("SR11BCM01:CURRENT_MONITOR", connect=True, timeout=1)
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+        self.beam_mode_PV = epics.pv.get_pv(
+            "FS01:BEAM_MODE_MONITOR", connect=True, timeout=1
+        )
+        self.current_PV = epics.pv.get_pv(
+            "SR11BCM01:CURRENT_MONITOR", connect=True, timeout=1
+        )
     # *--------------------------------* #
-	# *----------- QT Config ----------* #
-	# *--------------------------------* #
+    # *----------- QT Config ----------* #
+    # *--------------------------------* #
     def closeEvent(self, event) -> None:
         """
-        Shutdown tasks for GUI. For now, just save shutdown time to log.
+        Shutdown tasks for GUI. Abort scan if scanning. Save shutdown time to log.
         """
+        if self._running_experiment:
+            self.abort()
+            self.dialog_wait_for_shutdown = QProgressDialog(
+                parent=self, labelText="Waiting for experiment to shutdown"
+            )
+            self.dialog_wait_for_shutdown.setMinimum(0)
+            self.dialog_wait_for_shutdown.setMaximum(1)
+            self.dialog_wait_for_shutdown.setWindowTitle("Please Wait")
+            self.dialog_wait_for_shutdown.setWindowModality(
+                Qt.WindowModality.ApplicationModal
+            )
+            self.dialog_wait_for_shutdown.show()
+            while self._running_experiment:
+                # pass control back to the application event loop
+                time.sleep(0.05)
+                QCoreApplication.processEvents()
+            self.dialog_wait_for_shutdown.setValue(1)
+            self.dialog_wait_for_shutdown.close()
+
         logging.debug("--- simpleGUI shutting down ---")
         shutdown_time = datetime.datetime.now()
         logging.debug(shutdown_time)
-        
+
         self.close()
         event.accept()
 
         return None
 
 
-##########################
-# ---- Qt Decorator ---- #
-# ---- (threadding) ---- #
-##########################
 class QtWorkerDecorator(QObject):
     """
     Qt wrapper for resdep \\
     Defines emitted signals and attaches them to the worker. \\
     The worker must contain these callbacks to emit signals 
     """
+
     # define emitted signals (from resdep)
-    progress = Signal(int) # step
+    progress = Signal(int)  # step
     new_plot_info = Signal(list, dict, dict)
-    status = Signal(str) # status: message
+    status = Signal(str)  # status: message
     data_path = Signal(Path)
     start_timer = Signal()
-    ADC_windows = Signal(list, str) # ADC windows, depolarised bunches
+    ADC_windows = Signal(list, str)  # ADC windows, depolarised bunches
     finished = Signal()
-    # ------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def __init__(self, worker: ResonantDepolarisation) -> None:
         super().__init__()
         self.worker = worker
@@ -922,44 +1098,52 @@ class QtWorkerDecorator(QObject):
         self.worker.ADC_windows_callback = self._emit_new_ADC_windows
 
         return None
-    # ------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def _emit_progress(self, step: int) -> None:
         self.progress.emit(step)
         return None
-    # ------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def _emit_new_plot_info(
-            self, 
-            freqs: list[float], 
-            beam_loss_window_1: dict[str, list[float]], 
-            beam_loss_window_2: dict[str, list[float]]
-            ) -> None:
-        self.new_plot_info.emit(freqs, beam_loss_window_1, beam_loss_window_2) 
+        self,
+        freqs: list[float],
+        beam_loss_window_1: dict[str, list[float]],
+        beam_loss_window_2: dict[str, list[float]],
+    ) -> None:
+        self.new_plot_info.emit(freqs, beam_loss_window_1, beam_loss_window_2)
         return None
-    # ------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def _emit_status(self, message: str) -> None:
         self.status.emit(message)
         return None
-    # ------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def _emit_data_path(self, data_path: Path) -> None:
         self.data_path.emit(data_path)
         return None
-    # ------------------------------------------------------------------------------
-    def _emit_start_timer(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def _emit_start_timer(
+        self,
+    ) -> None:
         self.start_timer.emit()
         return None
-    # ------------------------------------------------------------------------------
-    def _emit_new_ADC_windows(self, ADC_windows: list[int], depolarised_bunches: str) -> None:
+    #--------------------------------------------------------------------------
+    def _emit_new_ADC_windows(
+        self, ADC_windows: list[int], depolarised_bunches: str
+    ) -> None:
         self.ADC_windows.emit(ADC_windows, depolarised_bunches)
         return None
-    # ------------------------------------------------------------------------------
-    def run(self,) -> None:
+    #--------------------------------------------------------------------------
+    def run(
+        self,
+    ) -> None:
         try:
             self.worker.start_experiment()
         finally:
             self.finished.emit()
         return None
-    # ------------------------------------------------------------------------------
-    def abort(self, ) -> None:
+    #--------------------------------------------------------------------------
+    def abort(
+        self,
+    ) -> None:
         self.worker.request_abort()
         return None
 
@@ -967,16 +1151,17 @@ class QtWorkerDecorator(QObject):
 def spawn():
     app = QApplication(sys.argv)
     MainWindow()
-    if hasattr(sys, "ps1"): # interactive check
+    if hasattr(sys, "ps1"):  # interactive check
         app.exec()
     else:
         sys.exit(app.exec())
+
 
 # run the app
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
-    if hasattr(sys, "ps1"): # interactive check
+    if hasattr(sys, "ps1"):  # interactive check
         app.exec()
     else:
         sys.exit(app.exec())
