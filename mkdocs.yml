@@ -1,7 +1,7 @@
 site_name: Resonant depolarisation docs
 site_url: https://liamjwatson.github.io/resdep/
 repo_name: resdep
-repo_url: https://bitbucket.synchrotron.org.au/scm/acc/resdep.git
+repo_url: https://github.com/liamjwatson/resdep
 theme:
   name: material
 

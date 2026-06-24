@@ -7,6 +7,8 @@ on:
       - develop # ! <------------ REMOVE THIS FOR PRODUCTION
 permissions:
   contents: write
+env:
+  SITE_URL: https://liamjwatson.github.io/resdep/
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -26,9 +28,8 @@ jobs:
           path: ~/.cache 
           restore-keys: |
             mkdocs-material-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install mkdocs-material mkdocstrings-python
-      - name: Build and Deploy Site
-        run: mkdocs gh-deploy --force --clean
+      - run: python -m pip install --upgrade pip
+      - run: pip install mkdocs-material 
+      - run: pip install mkdocstrings-python
+      - run: mkdocs build --strict
+      - run: mkdocs gh-deploy --force -- clean
