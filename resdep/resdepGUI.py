@@ -157,7 +157,7 @@ class MainWindow(QWidget):
         # add everything to full layout
         main_window_layout.addWidget(self.top_pane)
         main_window_layout.addWidget(self.progress_bar)
-        main_window_layout.addWidget(self.MX3_pane)
+        main_window_layout.addWidget(self.BPM_pane)
         main_window_layout.addWidget(self.button_pane)
         main_window_layout.addWidget(self.status_bar)
 
@@ -237,13 +237,19 @@ class MainWindow(QWidget):
         # This goes above run, but its a setting and should be added to
         # the list of widgets
 
-        self.MX3_pane = QWidget(self)
-        self.MX3_layout = QHBoxLayout()
-        self.MX3_pane.setLayout(self.MX3_layout)
-        self.MX3_layout.addStretch()
-        self.checkbox_measure_MX3 = QCheckBox("Measure MX3?")
-        self.checkbox_measure_MX3.setChecked(False)
-        self.MX3_layout.addWidget(self.checkbox_measure_MX3)
+        self.BPM_pane = QWidget(self)
+        self.BPM_layout = QHBoxLayout()
+        self.BPM_pane.setLayout(self.BPM_layout)
+        self.BPM_layout.addStretch()
+        self.checkbox_measure_SR_BPMs = QCheckBox("Measure SR BPMs?")
+        self.checkbox_measure_SR_BPMs.setChecked(False)
+        self.BPM_layout.addWidget(self.checkbox_measure_SR_BPMs)
+        self.checkbox_measure_TBPMs = QCheckBox("Measure TBPMs?")
+        self.checkbox_measure_TBPMs.setChecked(False)
+        self.BPM_layout.addWidget(self.checkbox_measure_TBPMs)
+        self.checkbox_measure_MX3_BPMs = QCheckBox("Measure MX3 BPMs?")
+        self.checkbox_measure_MX3_BPMs.setChecked(False)
+        self.BPM_layout.addWidget(self.checkbox_measure_MX3_BPMs)
 
         # add settings widgets to a dict for loops (enabling/disabling)
         self.settings_pane_widgets: dict[str, QWidget] = {
@@ -259,7 +265,9 @@ class MainWindow(QWidget):
             "ADC_window_1": self.ADC_window_1,
             "ADC_offset_2": self.ADC_offset_2,
             "ADC_window_2": self.ADC_window_2,
-            "_measure_MX3": self.checkbox_measure_MX3,
+            "_measure_SR_BPMs": self.checkbox_measure_SR_BPMs,
+            "_measure_TBPMs": self.checkbox_measure_TBPMs,
+            "_measure_MX3_BPMs": self.checkbox_measure_MX3_BPMs,
         }
 
         self.load_default_settings()
@@ -324,7 +332,13 @@ class MainWindow(QWidget):
             self.update_repolarisation_time
         )
         self.button_do_fit.clicked.connect(self.do_fit)
-        self.checkbox_measure_MX3.checkStateChanged.connect(
+        self.checkbox_measure_SR_BPMs.checkStateChanged.connect(
+            self.update_experiment_settings
+        )
+        self.checkbox_measure_TBPMs.checkStateChanged.connect(
+            self.update_experiment_settings
+        )
+        self.checkbox_measure_MX3_BPMs.checkStateChanged.connect(
             self.update_experiment_settings
         )
 
@@ -482,25 +496,28 @@ class MainWindow(QWidget):
     ) -> None:
         """Configure the logger to write to console and logfile"""
         pass
-        # self.start_time = datetime.datetime.now()
-        # date_str 		= self.start_time.strftime("%Y-%m-%d")
-        # hours_str 		= self.start_time.strftime("%H%Mh")
-        # seconds_str 	= self.start_time.strftime("%Ss")
-        # filename: str   = f"logfile_{date_str}_{hours_str}-{seconds_str}.log"
+        self.start_time = datetime.datetime.now()
+        date_str 		= self.start_time.strftime("%Y-%m-%d")
+        hours_str 		= self.start_time.strftime("%H%Mh")
+        seconds_str 	= self.start_time.strftime("%Ss")
+        filename: str   = f"logfile_{date_str}_{hours_str}-{seconds_str}.log"
 
-        # logger_format = "%(asctime)s - %(levelname)s - %(message)s"
-        # logging.getLogger("")
-        # logging.basicConfig(level=logging.DEBUG,
-        #                     format=logger_format,
-        #                     filename=self.logfile_path / filename,
-        #                     filemode='w')
-        # # Until here logs only to file: 'logfile'
+        logger_format = "%(asctime)s - %(levelname)s - %(message)s"
+        logger_formatter = logging.Formatter(logger_format)
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(logger_formatter)
+        file_handler = logging.FileHandler(filename=self.logfile_path/filename)
+        file_handler.setFormatter(logger_formatter)
+        self.logger.addHandler(stream_handler)
+        self.logger.addHandler(file_handler)
 
-        # # supress matplotlib font manager DEBUG logs
-        # logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+        # supress matplotlib font manager DEBUG logs
+        logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 
-        # logging.debug(self.start_time)
-        # logging.debug("--- resdepGUI starting up ---")
+        self.logger.debug(self.start_time)
+        self.logger.debug("--- resdepGUI starting up ---")
 
     # *--------------------------------* #
     # *---------- Experiment ----------* #
@@ -755,7 +772,7 @@ class MainWindow(QWidget):
                     widget.setChecked(bool(value))
 
             except Exception:
-                logging.error(traceback.format_exc())
+                self.logger.error(traceback.format_exc())
 
         return None
 
@@ -784,7 +801,7 @@ class MainWindow(QWidget):
                 json.dump(settings_pane_config, f)
 
         except Exception:
-            logging.error(traceback.format_exc())
+            self.logger.error(traceback.format_exc())
             QMessageBox.critical(
                 self, "Error", "Failed to save experiment settings?."
             )
@@ -829,10 +846,18 @@ class MainWindow(QWidget):
         self.resdep.set_adc_counter_offset_2 = self.ADC_offset_2.value()
         self.resdep.set_adc_counter_window_2 = self.ADC_window_2.value()
 
-        if self.checkbox_measure_MX3.isChecked():
-            self.resdep._measuring_MX3 = True
+        if self.checkbox_measure_SR_BPMs.isChecked():
+            self.resdep._measuring_MX3_BPMs = True
         else:
-            self.resdep._measuring_MX3 = False
+            self.resdep._measuring_MX3_BPMs = False
+        if self.checkbox_measure_TBPMs.isChecked():
+            self.resdep._measuring_TBPMs = True
+        else:
+            self.resdep._measuring_TBPMs = False
+        if self.checkbox_measure_MX3_BPMs.isChecked():
+            self.resdep._measuring_MX3_BPMs = True
+        else:
+            self.resdep._measuring_MX3_BPMs = False
 
         # calculate range
         self.resdep.calculate_range()
@@ -879,7 +904,9 @@ class MainWindow(QWidget):
             "ADC_window_1": 42,
             "ADC_offset_2": 42,
             "ADC_window_2": 44,
-            "_measure_MX3": False,
+            "_measure_SR_BPMs": False,
+            "_measure_TBPMs": False, 
+            "_measure_MX3_BPMs": False,
         }
 
         for key, widget in self.settings_pane_widgets.items():
@@ -894,7 +921,7 @@ class MainWindow(QWidget):
                     widget.setChecked(default_values[key])
 
             except Exception:
-                logging.error(traceback.format_exc())
+                self.logger.error(traceback.format_exc())
 
         return None
 
@@ -929,7 +956,7 @@ class MainWindow(QWidget):
                         widget.setChecked(settings_pane_config[key])
 
                 except Exception:
-                    logging.error(traceback.format_exc())
+                    self.logger.error(traceback.format_exc())
 
             self.on_status_update("Ready")
 
@@ -1089,7 +1116,7 @@ class MainWindow(QWidget):
         Interrupts resdep experiment loop.
         """
 
-        logging.critical("Abort!")
+        self.logger.critical("Abort!")
 
         # Disable abort button
         self.button_abort.setEnabled(False)
@@ -1154,9 +1181,9 @@ class MainWindow(QWidget):
         For now, just save used input parameters
         """
 
-        logging.debug("--- resdepGUI shutting down ---")
+        self.logger.debug("--- resdepGUI shutting down ---")
         shutdown_time = datetime.datetime.now()
-        logging.debug(shutdown_time)
+        self.logger.debug(shutdown_time)
 
         answer = QMessageBox.question(
             self,

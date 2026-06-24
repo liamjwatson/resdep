@@ -455,33 +455,25 @@ class MainWindow(QWidget):
         self,
     ) -> None:
         """Configure the logger to write to console and logfile"""
-        pass
-        # self.start_time = datetime.datetime.now()
-        # date_str 		= self.start_time.strftime("%Y-%m-%d")
-        # hours_str 		= self.start_time.strftime("%H%Mh")
-        # seconds_str 	= self.start_time.strftime("%Ss")
-        # filename: str   = f"logfile_{date_str}_{hours_str}-{seconds_str}.log"
-
-        # logger_format = "%(asctime)s - %(levelname)s - %(message)s"
-        # file_logger = logging.getLogger("")
-        # logging.basicConfig(level=logging.DEBUG,
-        #                     format=logger_format,
-        #                     filename=self.logfile_path / filename,
-        #                     filemode='w')
-        # # Until here logs only to file: 'logfile'
-        # # define a new Handler to log to console as well
-        # console_logger = logging.StreamHandler()
-        # # optional, set the logging level
-        # console_logger.setLevel(logging.INFO)
-        # # set a format which is the same for console use
-        # formatter = logging.Formatter(logger_format)
-        # # tell the handler to use this format
-        # console_logger.setFormatter(formatter)
-        # # add the handler to the root logger
-        # file_logger.addHandler(console_logger)
-
-        # logging.debug(self.start_time)
-        # logging.debug("--- simpleGUI starting up ---")
+        self.start_time = datetime.datetime.now()
+        date_str 		= self.start_time.strftime("%Y-%m-%d")
+        hours_str 		= self.start_time.strftime("%H%Mh")
+        seconds_str 	= self.start_time.strftime("%Ss")
+        filename: str   = f"logfile_{date_str}_{hours_str}-{seconds_str}.log"
+    
+        logger_format = "%(asctime)s - %(levelname)s - %(message)s"
+        logger_formatter = logging.Formatter(logger_format)
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(logger_formatter)
+        file_handler = logging.FileHandler(filename=self.logfile_path/filename)
+        file_handler.setFormatter(logger_formatter)
+        self.logger.addHandler(stream_handler)
+        self.logger.addHandler(file_handler)
+    
+        self.logger.debug(self.start_time)
+        self.logger.debug("--- simpleGUI starting up ---")
 
         return None
     #--------------------------------------------------------------------------
@@ -684,7 +676,7 @@ class MainWindow(QWidget):
             Exception
         ):  # Catch something critical that `automagic_fit()` does not handle
             error = traceback.format_exc()
-            logging.error(error)
+            self.logger.error(error)
 
         finally:
             # update GUI
@@ -743,7 +735,7 @@ class MainWindow(QWidget):
                 error = (
                     f"{pv} refused to connect. Cannot determine machine state."
                 )
-                logging.warning(error)
+                self.logger.warning(error)
                 return False, error
 
         beam_mode: Union[int, None] = self.beam_mode_PV.get(timeout=0.1)
@@ -757,7 +749,7 @@ class MainWindow(QWidget):
                 + f"Expected any of:\n{self.beam_modes}\n" 
                 +"Aborting request to run resdep."
             )
-            logging.warning(error)
+            self.logger.warning(error)
             return False, error
 
         if current is None:
@@ -765,7 +757,7 @@ class MainWindow(QWidget):
                 "Current PV (DCCT) returned None.\n" 
                 + "Aborting request to run resdep."
             )
-            logging.warning(error)
+            self.logger.warning(error)
             return False, error
 
         # Assume can run, else check for errors
@@ -794,21 +786,21 @@ class MainWindow(QWidget):
                 + f"{current:0.0f} mA is not enough resolution for measurement.\n" 
                 + "Aborting request to run resdep."
             )
-            logging.warning(error)
+            self.logger.warning(error)
             return False, error
         elif self.polarisation < 95:  # %
             error = (
                 "Beam polarisation is less than 95%; not enough resolution.\n"
                 + "Aborting request to run resdep."
             )
-            logging.warning(error)
+            self.logger.warning(error)
             return False, error
         elif recent_beam_injection:
             error = (
                 "Beam has been injected too recently and has not have enough" 
                 + "time to polarise (requires at least 39 minutes)."
             )
-            logging.warning(error)
+            self.logger.warning(error)
             return False, error
         elif (
             scan_type == "automatic"
@@ -819,7 +811,7 @@ class MainWindow(QWidget):
                      + f"\"{self.beam_modes[beam_mode]}\".\n" 
                      + "Expected any form of 'User Beam'.\n" 
                      + "Aborting request to run resdep.")
-            logging.warning(error)
+            self.logger.warning(error)
             return False, error
 
         return verdict, error
@@ -909,8 +901,6 @@ class MainWindow(QWidget):
         #-------------------------------------------------------------------------- exp variables
         self.resdep.bounds = 0.05 / 100  # input %, output decimal
         self.resdep.sweep_rate = 5  # Hz/s
-        if self.checkbox_machine_studies.isChecked():
-            self.resdep._measuring_MX3 = True
     # *--------------------------------* #
     # *------ Button Callbacks --------* #
     # *--------------------------------* #
@@ -1059,9 +1049,9 @@ class MainWindow(QWidget):
             self.dialog_wait_for_shutdown.setValue(1)
             self.dialog_wait_for_shutdown.close()
 
-        logging.debug("--- simpleGUI shutting down ---")
+        self.logger.debug("--- simpleGUI shutting down ---")
         shutdown_time = datetime.datetime.now()
-        logging.debug(shutdown_time)
+        self.logger.debug(shutdown_time)
 
         self.close()
         event.accept()

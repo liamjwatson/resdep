@@ -203,7 +203,9 @@ class ResonantDepolarisation:
 
         # --- init states
         self._injecting: bool = False
-        self._measuring_MX3: bool = False
+        self._measuring_SR_BPMs: bool = False
+        self._measuring_TBPMs: bool = False
+        self._measuring_MX3_BPMs: bool = False
 
         # default f_rev. Will calculate f_rev from masterRF on experiment start
         # (so we dont have any epics connection on GUI start)
@@ -345,17 +347,17 @@ class ResonantDepolarisation:
 
             last_slow_log_call: float = time.time()
 
-            logging.info("|--------------------------------------------|")
-            logging.info("|----------- BEGINNING EXPERIMENT -----------|")
-            logging.info("|---------- Resonant Depolarisation ---------|")
-            logging.info("|--------------------------------------------|")
+            self.logger.info("|--------------------------------------------|")
+            self.logger.info("|----------- BEGINNING EXPERIMENT -----------|")
+            self.logger.info("|---------- Resonant Depolarisation ---------|")
+            self.logger.info("|--------------------------------------------|")
             # ---------------------------------------------------------------------------------
             # --- Collect baseline data (BPMs)
             end = time.time() + 10
             if self.status_callback:
                 self.status_callback("Collecting baseline BPM data (10 s)...")
             else:
-                logging.info("Status: Collecting baseline BPM data (10 s)...")
+                self.logger.info("Status: Collecting baseline BPM data (10 s)...")
 
             while time.time() <= end:
                 now = time.time()
@@ -461,12 +463,12 @@ class ResonantDepolarisation:
                 time.sleep(0.01)
 
         except Exception:
-            logging.error(traceback.format_exc())
+            self.logger.error(traceback.format_exc())
 
         finally:
-            logging.info("|--------------------------------------------|")
-            logging.info("|------------- EXPERIMENT DONE ! ------------|")
-            logging.info("|--------------------------------------------|")
+            self.logger.info("|--------------------------------------------|")
+            self.logger.info("|------------- EXPERIMENT DONE ! ------------|")
+            self.logger.info("|--------------------------------------------|")
 
             if self.status_callback:
                 self.status_callback("Cleaning up...")
@@ -477,24 +479,24 @@ class ResonantDepolarisation:
             self.save_data()
 
             # turn off kicker
-            logging.info("Turning kicker off...")
+            self.logger.info("Turning kicker off...")
             self.kicker_amp_PV.put(0, use_complete=True)
             while not self.kicker_amp_PV.put_complete:
                 time.sleep(0.05)
-            logging.info("Kicker OFF!")
+            self.logger.info("Kicker OFF!")
 
             self.injection_trigger.clear_callbacks()
 
             # restore epicsBLM window settings
-            logging.info("attempting to restore BLM inits...")
+            self.logger.info("attempting to restore BLM inits...")
             self.blm.restore_inits(mode="adc_counter_masks")
             self.blm.restore_inits(mode="decimation")
 
-            logging.info(
+            self.logger.info(
                 "To manually plot data from the terminal, run class method `plot_data()`."
             )
 
-            logging.info("Done everything :)")
+            self.logger.info("Done everything :)")
 
         return None
 
@@ -563,7 +565,7 @@ class ResonantDepolarisation:
                 seconds=int(self.sweep_time + 10 * number_of_top_ups)
             )
         )
-        # logging.info('Estimated sweep time {0}'.format(time.strftime('%H:%M"%S', time.gmtime(self.sweep_time))))
+        # self.logger.info('Estimated sweep time {0}'.format(time.strftime('%H:%M"%S', time.gmtime(self.sweep_time))))
 
         return None
 
@@ -594,19 +596,15 @@ class ResonantDepolarisation:
 
         # --- BPMs
         # Storage ring
-        self.sr_bpms = SR_BPMs()
-        try:
+        if self._measuring_SR_BPMs:
+            self.sr_bpms = SR_BPMs()
             self.sr_bpms.connect()
-        except ConnectionRefusedError:
-            pass
         # TBPMs
-        self.tbpms = TBPMs()
-        try:
+        if self._measuring_TBPMs:
+            self.tbpms = TBPMs()
             self.tbpms.connect()
-        except ConnectionRefusedError:
-            pass
         # MX3
-        if self._measuring_MX3:
+        if self._measuring_MX3_BPMs:
             self.mx3_bpms = MX3_BPMs()
             self.mx3_bpms.connect()
 
@@ -915,26 +913,18 @@ class ResonantDepolarisation:
         if self.data_path_callback:
             self.data_path_callback(self.data_path)
 
-        # --- logging to console and file
         logger_format = "%(asctime)s - %(levelname)s - %(message)s"
-        file_logger = logging.getLogger("")
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format=logger_format,
-            filename=self.data_path / "logfile.log",
-            filemode="w",
+        logger_formatter = logging.Formatter(logger_format)
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        # stream_handler = logging.StreamHandler()
+        # stream_handler.setFormatter(logger_formatter)
+        file_handler = logging.FileHandler(
+            filename=self.data_path/"logfile.log"
         )
-        # Until here logs only to file: 'logfile'
-        # define a new Handler to log to console as well
-        console_logger = logging.StreamHandler()
-        # optional, set the logging level
-        console_logger.setLevel(logging.INFO)
-        # set a format which is the same for console use
-        formatter = logging.Formatter(logger_format)
-        # tell the handler to use this format
-        console_logger.setFormatter(formatter)
-        # add the handler to the root logger
-        file_logger.addHandler(console_logger)
+        file_handler.setFormatter(logger_formatter)
+        # self.logger.addHandler(stream_handler)
+        self.logger.addHandler(file_handler)
 
         return None
 
@@ -1030,13 +1020,15 @@ class ResonantDepolarisation:
                 )
 
             # BPMs
-            self.sr_bpms.record_data()
-            self.tbpms.record_data()
-            if self._measuring_MX3:
+            if self._measuring_SR_BPMs:
+                self.sr_bpms.record_data()
+            if self._measuring_TBPMs:
+                self.tbpms.record_data()
+            if self._measuring_MX3_BPMs:
                 self.mx3_bpms.record_data()
 
         except Exception:
-            logging.error(traceback.format_exc())
+            self.logger.error(traceback.format_exc())
 
         return None
 
@@ -1063,7 +1055,7 @@ class ResonantDepolarisation:
                     self.ODB_data[key].append(pv.get(timeout=0.5))
 
         except Exception:
-            logging.error(traceback.format_exc())
+            self.logger.error(traceback.format_exc())
 
         return None
 
@@ -1136,7 +1128,7 @@ class ResonantDepolarisation:
         the BbB by the difference between them.
 
         """
-        logging.info("Status: Time aligning BLM ADC windows and BbB system...")
+        self.logger.info("Status: Time aligning BLM ADC windows and BbB system...")
 
         SUM_DEC: int = 86
         SUMDEC_PERIODS: int = 50
@@ -1258,10 +1250,10 @@ class ResonantDepolarisation:
         else:
             raise TypeError("SRAM x and/or y waveforms returned None")
 
-        logging.debug(
+        self.logger.debug(
             f"BbB SRAM middle empty bucket={SRAM_middle_empty_bucket}"
         )
-        logging.debug(f"BLM middle empty bucket={blm_middle_empty_bucket}")
+        self.logger.debug(f"BLM middle empty bucket={blm_middle_empty_bucket}")
         print(f"BbB SRAM middle empty bucket={SRAM_middle_empty_bucket}")
         print(f"BLM middle empty bucket={blm_middle_empty_bucket}")
         # Shift the calculated depolarised bunches by the time offset between
@@ -1305,12 +1297,12 @@ class ResonantDepolarisation:
                 calculated_adc_counter_windows, depolarised_bunches
             )
 
-        logging.debug(
+        self.logger.debug(
             "Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]"
         )
-        logging.debug(calculated_adc_counter_windows)
-        logging.debug("Corresponding depolarised bunches for BbB:")
-        logging.debug(depolarised_bunches)
+        self.logger.debug(calculated_adc_counter_windows)
+        self.logger.debug("Corresponding depolarised bunches for BbB:")
+        self.logger.debug(depolarised_bunches)
 
         return None
 
@@ -1379,7 +1371,7 @@ class ResonantDepolarisation:
         """
 
         try:
-            logging.info("Saving data...")
+            self.logger.info("Saving data...")
 
             # metadata
             del self.metadata["projected end time"]
@@ -1443,25 +1435,27 @@ class ResonantDepolarisation:
 
             # --- BPMs
             # SR
-            sr_bpms_path = self.data_path / "BPMs" / "SR"
-            Path.mkdir(sr_bpms_path, parents=True)
-            self.sr_bpms.save_data(path=sr_bpms_path)
+            if self._measuring_SR_BPMs:
+                sr_bpms_path = self.data_path / "BPMs" / "SR"
+                Path.mkdir(sr_bpms_path, parents=True)
+                self.sr_bpms.save_data(path=sr_bpms_path)
 
             # TBPMs
-            tbpms_path = self.data_path / "BPMs" / "TBPMs"
-            Path.mkdir(tbpms_path, parents=True)
-            self.tbpms.save_data(path=tbpms_path)
+            if self._measuring_TBPMs:
+                tbpms_path = self.data_path / "BPMs" / "TBPMs"
+                Path.mkdir(tbpms_path, parents=True)
+                self.tbpms.save_data(path=tbpms_path)
 
             # MX3
-            if self._measuring_MX3:
+            if self._measuring_MX3_BPMs:
                 mx3_bpms_path = self.data_path / "BPMs" / "MX3"
                 Path.mkdir(mx3_bpms_path, parents=True)
                 self.mx3_bpms.save_data(path=mx3_bpms_path)
 
         except Exception:
-            logging.error(traceback.format_exc())
+            self.logger.error(traceback.format_exc())
 
-        logging.info("Data saved!")
+        self.logger.info("Data saved!")
 
         return None
 
@@ -1480,7 +1474,7 @@ class ResonantDepolarisation:
         """
 
         try:
-            logging.info("Attempting to plot ratio data...")
+            self.logger.info("Attempting to plot ratio data...")
 
             processed_data = ProcessedData(resdep=self)
             processed_data.calculate_ratio_loss(sigma=200, bin=True)
@@ -1494,7 +1488,7 @@ class ResonantDepolarisation:
             E0_mean, E0_mean_sigfig, fitted_beam_energy_string, error = (
                 fitting.automagic_fit()
             )
-            logging.info(fitted_beam_energy_string)
+            self.logger.info(fitted_beam_energy_string)
             plotting.plot_ratio_loss()
             plotting.plot_fits()
             plt.savefig(
@@ -1509,7 +1503,7 @@ class ResonantDepolarisation:
             input("Plot displayed. Record values. Then continue?")
 
         except Exception:
-            logging.error(traceback.format_exc())
+            self.logger.error(traceback.format_exc())
 
         return None
 
@@ -1533,7 +1527,7 @@ class ResonantDepolarisation:
                 self._injecting = True
 
         except Exception:
-            logging.error(traceback.format_exc())
+            self.logger.error(traceback.format_exc())
 
     # *--------------------------------* #
     # *---------- GUI Signals ---------* #
@@ -1783,7 +1777,7 @@ class ProcessedData:
         with open(path / "fit_stats.json", "w") as f:
             json.dump(stats, f)
 
-        logging.info("Processed data saved!")
+        resdep.logger.info("Processed data saved!")
 
         return None
 
