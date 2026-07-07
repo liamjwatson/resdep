@@ -41,7 +41,7 @@ mu: str = "\u03bc"
 # --- import data
 
 data_path = Path("Z:/usr/data/resdep")
-data_path = data_path / "2026" / "2026-06-15" / "2315h"
+data_path = data_path / "2026" / "2026-07-01" / "1007h"
 print(f"folder={data_path.name}")
 if not data_path.exists():
     raise FileNotFoundError("Incorrect path")
@@ -119,7 +119,7 @@ resdep.res_freq = res_freq
 
 processed_data = ProcessedData(resdep=resdep)
 processed_data.sectors_to_fit = [1, 3, 8, 14]
-processed_data.calculate_ratio_loss(sigma=1, bin=True)
+processed_data.calculate_ratio_loss(sigma=500, bin=True)
 
 graph = StandaloneGraph()
 plotting = PlottingClass(
@@ -688,13 +688,13 @@ def shade_kicker_off(axes, label: bool = True) -> None:
             )
 
 if __name__ == "__main__":
-    load_bpm_data(bpms=["SR", "MX3"])
+    # load_bpm_data(bpms=["SR", "MX3"])
     # plot_SR_BPMs_around_kicker()
     # plot_SR_BPMs_around_MX3_IVU()
-    plot_MX3_BPMs(fixed_limits=True)
+    # plot_MX3_BPMs(fixed_limits=True)
 
-    # plotting.plot_ratio_loss()
-    # graph.show()
+    plotting.plot_ratio_loss()
+    graph.show()
     # plotting.plot_step_loss_detection()
     # fitting.fit_error_functions()
     # plotting.plot_fits()

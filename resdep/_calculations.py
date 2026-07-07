@@ -1,5 +1,6 @@
 """
-Functions for calculating beam energy, tunes, and rounding errors and values to significant figures.
+Functions for calculating beam energy, tunes, and rounding errors and values 
+to significant figures.
 """
 
 """
@@ -14,19 +15,7 @@ from typing import Union, overload, Literal
 import numpy as np
 import numpy.typing as npt
 
-# --- Constants
-g: float = 2.0023193043609236
-a_g: float = (g - 2) / 2
-m_e: float = 9.109383713928e-31  # kg
-c: float = 299792458  # m/s
-e: float = 1.602176634e-19  # C
-# * Fractional spin tune
-v_s: float = 0.833  # 6.833
-v_s303GeV: float = 0.879  # 6.879, based on if the beam energy is 3.0311 GeV
-# End User Run Machine Parameters (2025-09-28)
-v_x: float = 0.289148  # 13.29
-v_y: float = 0.21626  # 5.219
-v_synch: float = 0.00847
+import resdep._constants as const
 
 @overload
 def energy_calc(
@@ -57,8 +46,8 @@ def energy_calc(
         Beam energy, GeV
     """
 
-    return (freq/f_rev - harmonic + 6)*m_e*c**2/(e*a_g*1e9)  # GeV
-# ------------------------------------------------------------------------------------------------------
+    return (freq/f_rev - harmonic + 6)*const.m_e*const.c**2/(const.e*const.a_g*1e9) 
+# -----------------------------------------------------------------------------
 @overload
 def freq_calc(
     energy: float, f_rev: float, harmonic: int
@@ -87,8 +76,8 @@ def freq_calc(
     frequency: float | np.floating
         Beam energy, GeV
     """
-    return f_rev*(energy*1e9*e*a_g/(m_e*c**2) + harmonic - 6)
-# ------------------------------------------------------------------------------------------------------
+    return f_rev*(energy*1e9*const.e*const.a_g/(const.m_e*const.c**2) + harmonic - 6)
+# -----------------------------------------------------------------------------
 def tune_calc(energy: float) -> float:
     """
     Energy (GeV) to tune (whole | non-fractional) conversion
@@ -98,8 +87,8 @@ def tune_calc(energy: float) -> float:
     energy: float
         Energy, GeV
     """
-    return a_g*e*energy*1e9/(m_e*c**2)
-# ------------------------------------------------------------------------------------------------------
+    return const.a_g*const.e*energy*1e9/(const.m_e*const.c**2)
+# -----------------------------------------------------------------------------
 def round_to_1_sigfig(value: Union[float, np.floating]) -> float:
     """
     Round to one significant figure for fitted beam energy formatting
@@ -107,7 +96,7 @@ def round_to_1_sigfig(value: Union[float, np.floating]) -> float:
     if value == 0:
         return 0
     return float(np.round(value, -int(np.floor(np.log10(abs(value))))))
-# ------------------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 def round_to_error_sigfig(
     value: Union[float, np.floating], error: Union[float, np.floating]
 ) -> float:
@@ -117,7 +106,7 @@ def round_to_error_sigfig(
     if error == 0:
         return float(value)
     return float(np.round(value, -int(np.floor(np.log10(np.abs(error))))))
-
+# -----------------------------------------------------------------------------
 def calculate_cusum(
         data: npt.NDArray,
         step_ref: float,
@@ -139,7 +128,7 @@ def calculate_cusum(
         )
         
     return cusum
-
+# -----------------------------------------------------------------------------
 def totvar_denoise(
         y: npt.NDArray, 
         eigval: float, 
@@ -147,7 +136,10 @@ def totvar_denoise(
         fused_lasso: bool = False
     ) -> npt.NDArray:
     """
-    
+    Total variance denoising algorithm.
+
+    Symbols are math based on 
+    [this paper](https://lcondat.github.io/publis/Condat-fast_TV-SPL-2012.pdf)
     """
     if fused_lasso and mu == 0:
         raise ValueError("Use mu>0 for fused_lasso mode")
@@ -244,7 +236,10 @@ def totvar_denoise(
 
 def fused_lasso_approx(v: float, mu: float) -> float:
     """
-    
+    fused lasso variant of total variance denoising. 
+
+    Symbols are math based on 
+    [this paper](https://lcondat.github.io/publis/Condat-fast_TV-SPL-2012.pdf)
     """
     if v > mu:
         v += -mu

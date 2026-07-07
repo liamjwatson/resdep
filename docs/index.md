@@ -1,17 +1,26 @@
+![spinning top precession](./images/spinning-top.gif "spinning top precession")
+
+[*PixarAnimationStudios/OpenUSD*](https://github.com/PixarAnimationStudios/OpenUSD)
+
 ## Overview
 
-For full documentation visit [mkdocs.org](https://www.mkdocs.org).
+An accurate measurement of the beam energy based on the polarisation of the 
+beam and its dependence on the Touschek scattering cross-section 
+(i.e. beam loss). 
 
-## Commands
+## Features
+- Operational during *user beam*
+- Accurate down to single keV ($10^{-6}$ resolution)
+- User friendly GUI
+- Expert level GUI for machine studies
 
-* `mkdocs new [dir-name]` - Create a new project.
-* `mkdocs serve` - Start the live-reloading docs server.
-* `mkdocs build` - Build the documentation site.
-* `mkdocs -h` - Print help message and exit.
+## Quick links
+- Repository (
+    [bitbucket](https://bitbucket.synchrotron.org.au/projects/ACC/repos/resdep/browse), 
+    [github](https://github.com/liamjwatson/resdep)
+)
+- [Confluence](https://confluence.synchrotron.org.au/confluence/display/AP/Resonant+Depolarisation)
+    (internal use only) 
 
-## Project layout
-
-    mkdocs.yml    # The configuration file.
-    docs/
-        index.md  # The documentation homepage.
-        ...       # Other markdown pages, images and other files.
+## Kubili
+- info on this TBC 

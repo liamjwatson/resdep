@@ -1,5 +1,6 @@
 """
-Helper class for resdep related to fitting cumulative distribution (cdf) curves to beam loss data.
+Helper class for resdep related to fitting cumulative distribution (cdf) 
+curves to beam loss data.
 """
 
 """
@@ -41,7 +42,8 @@ class FittingClass:
     ----
     [`ResonantDepolarisation`][resdep.experiment.ResonantDepolarisation] and
     [`ProcessedData`][resdep.experiment.ProcessedData]
-    are passed in by reference when instanced. This is to reduce the number of args passed in and returned
+    are passed in by reference when instanced. 
+    This is to reduce the number of args passed in and returned
     by helper functions.
     """
     def __init__(
@@ -103,13 +105,16 @@ class FittingClass:
         Returns
         -------
         y_model: dict[str, npt.NDArray[np.float64]]
-            ydata for the error function model as a dictionary, where each key is a sector
+            ydata for the error function model as a dictionary, 
+            where each key is a sector.
         fitted_beam_energies: dict[str, float]
-            beam energies derived from the fit (middle of the inflection point of the error function)
+            Beam energies derived from the fit 
+            (middle of the inflection point of the error function).
         fitted_beam_energies_stddevs: dict[str, float]
-            beam energy standard deviations
+            Beam energy standard deviations
         fit_results: str
-            formatted string detailing the resonance frequency, corresponding energy, and goodness-of-fit (r square)
+            Formatted string detailing the resonance frequency, 
+            corresponding energy, and goodness-of-fit (r square)
 
         Tip
         ---
@@ -119,7 +124,6 @@ class FittingClass:
         2. Run member function [`calculate_ratio_loss`][resdep.experiment.ProcessedData.calculate_ratio_loss]
         """
 
-        # fit results dicts
         y_model: dict[str, npt.NDArray[np.float64]] = {}
         fitted_beam_energy_frequencies: dict[str, float] = {}
         fitted_beam_energies: dict[str, float] = {}
@@ -130,11 +134,10 @@ class FittingClass:
             step_location = self.resdep.res_freq
         freqs = self.processed_data.freqs_array[mask]
 
-        # bounds
         bounds: dict[str, optimize.Bounds] = {}  # defaults to +- infty
-        bounds["mean"] = optimize.Bounds(lb=freqs[0], ub=freqs[-1])
+        bounds["mean"] = optimize.Bounds(lb=min(freqs), ub=max(freqs))
         bounds["scaling factor"] = optimize.Bounds()
-        bounds["amplitude"] = optimize.Bounds(lb=0)
+        bounds["amplitude"] = optimize.Bounds(lb=-2, ub=2)
         bounds["offset"] = optimize.Bounds(lb=0)
         bounds_formatted = (
             [bound.lb[0] for bound in bounds.values()],
@@ -184,7 +187,6 @@ class FittingClass:
                 # r-squared
                 r2 = 1 - (ss_res / ss_tot)
 
-                # VAR_FREQ_UPPER_BOUND = 5e-5 # kHz
                 R2_LOWER_BOUND = 0.4
                 if r2 < R2_LOWER_BOUND:  # poor fit
                     logging.warning(
@@ -247,16 +249,19 @@ class FittingClass:
         E0_stddev: float
             Two standard devations of mean energy
         E0_mean_sigfig: float
-            Mean energy quoted to the number of significant figures as the standard deviation allows
+            Mean energy quoted to the number of significant figures as the 
+            standard deviation allows.
         E0_stddev_sigfig: float
             Two standard deviations of the mean energy to one significant figure
         fitted_beam_energy_str: str
-            Mean energy plus minus two standard deviations, all quoted to the appropirate number of sigfigs,
-            as a formatted str. Example: 3.030287 GeV \u00b1 7 keV
+            Mean energy plus minus two standard deviations, all quoted to the 
+            appropirate number of sigfigs, as a formatted str. 
+            Example: 3.030287 GeV \u00b1 7 keV
 
         Tip
         ---
-        First requires executing [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions]
+        First requires executing 
+        [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions]
         """
 
         energies: dict[str, float] = self.processed_data.fitted_beam_energies
@@ -268,7 +273,7 @@ class FittingClass:
 
         if len(energies) == 0:
             raise KeyError('dict "energies" contains no data.')
-        elif len(energies) == 1:
+        elif len(energies) == 1: # single energy
             E0_stddev: float = float(2 * list(stddevs.values())[0])
         else:
             E0_stddev: float = float(2 * np.std(list(energies.values())))
@@ -300,7 +305,8 @@ class FittingClass:
     def find_step_change_in_beam_loss(
         self,
     ) -> np.floating:
-        """Determines step loss from the fact that the derivative of a cdf is a gauss.
+        """
+        Determines step loss from the fact that the derivative of a cdf is a gauss.
         Forms part of [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
 
         Returns
@@ -315,9 +321,11 @@ class FittingClass:
 
         Process
         -------
-        - Smooth loss data into oblivion, determine the location of the step by the derivative of the smoothed data.
+        - Smooth loss data into oblivion, determine the location of the step 
+            by the derivative of the smoothed data.
         - Smooth data approaches cdf (cumulative distribution function ~ error function)
-        - Derivative of error function / cdf is a gauss. Gauss peak should be middle of step in original loss data.
+        - Derivative of error function / cdf is a gauss. 
+            Gauss peak should be middle of step in original loss data.
         """
         steps: list[float] = []
         x = self.processed_data.freqs_array
@@ -357,7 +365,9 @@ class FittingClass:
         self,
     ) -> tuple[float, float, str, Union[str, None]]:
         """
-        Calculates best guess for resonance in the data (based off derivative cdf -> gauss). Applies fit over best guess of frequency range.
+        Calculates best guess for resonance in the data 
+        (based off derivative cdf -> gauss). 
+        Applies fit over best guess of frequency range.
 
         Returns
         -------
@@ -365,12 +375,14 @@ class FittingClass:
             Fitted beam energy (statistical average)
         
         E0_mean_sigfig: float
-            Fitted beam energy quoted to the number of significant figures in the error.
+            Fitted beam energy quoted to the number of 
+            significant figures in the error.
 
         fitted_beam_energy_string: str
-            Formatted beam energy string of the form:\\
-            \"`E0` GeV \u00b1 `error` keV\" \\
-            where the energy is quoted to the number of significant figures in the error.
+            Formatted beam energy string of the form:
+                \"`E0` GeV \u00b1 `error` keV\"
+            where the energy is quoted to the number of 
+            significant figures in the error.
 
         Tip
         --- 
@@ -385,7 +397,6 @@ class FittingClass:
         try:
             steps_mean = self.find_step_change_in_beam_loss()
 
-            # calculate freq mask around step --> write to self.processed_data.mask
             FITTING_BOUNDS: float = 2  # kHz, plus minus
             lower_bound: np.floating = steps_mean - FITTING_BOUNDS  # kHz
             upper_bound: np.floating = steps_mean + FITTING_BOUNDS  # kHz
@@ -415,7 +426,6 @@ class FittingClass:
             logging.info(f"Mean beam energy = {fitted_beam_energy_str}")
 
             return E0_mean, E0_mean_sigfig, fitted_beam_energy_str, error
-    # -------------------------------------------------------------------------
 
 if __name__ == "__main__":
     print(

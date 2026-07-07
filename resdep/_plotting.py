@@ -13,6 +13,7 @@ Helper Class resdep related to plotting to the matplotlib canvas in the GUI.
 
 from typing import TYPE_CHECKING, Union, Callable
 import builtins
+import re
 import numpy as np
 import numpy.typing as npt
 import logging
@@ -34,6 +35,7 @@ from scipy.special import erf
 from scipy.signal import medfilt
 
 # resdep
+import resdep._constants as const
 from resdep._calculations import (
     energy_calc, freq_calc, calculate_cusum, totvar_denoise
 )
@@ -99,7 +101,8 @@ class PlottingClass:
     ----
     [`ResonantDepolarisation`][resdep.experiment.ResonantDepolarisation] and
     [`ProcessedData`][resdep.experiment.ProcessedData]
-    are passed in by reference when instanced. This is to reduce the number of args passed in and returned
+    are passed in by reference when instanced. 
+    This is to reduce the number of args passed in and returned
     by helper functions.
     """
 
@@ -130,19 +133,19 @@ class PlottingClass:
         1. Instance [`ProcessedData`][resdep.experiment.ProcessedData]
         2. Run member function [`calculate_ratio_loss`][resdep.experiment.ProcessedData.calculate_ratio_loss]
 
-        Data is smoothed by a gaussian function with a sigma defined on the GUI, or by standard binning (200 points).
+        Data is smoothed by a gaussian function with a sigma defined on the 
+        GUI, or by standard binning (500 points).
         """
         try:
             x = self.processed_data.freqs_array
             for sector, loss in self.processed_data.ratio_loss.items():
                 y = loss
-                # plot
                 vertical_offset = 0.01 * int(sector[:-1])
                 self.graph.axes.plot(x, y + vertical_offset, label=sector)
 
             self.graph.axes.legend(
                 loc="center left", ncol=1, reverse=True
-            )  # bbox_to_anchor=(0.5, -0.3)
+            )  
             self.graph.figure.suptitle("Ratio beam loss")
             self.graph.axes.set_xlabel("frequency (kHz)")
 
@@ -164,9 +167,11 @@ class PlottingClass:
     # -------------------------------------------------------------------------
     def calculate_fitting_mask(self) -> npt.NDArray[np.bool_]:
         """
-        Grabs the current limits of the interactive plot (including when it is zoomed in) and calculates the frequency range displayed.
-        Used by [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions], and
-        [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
+        Grabs the current limits of the interactive plot 
+        (including when it is zoomed in) and calculates 
+        the frequency range displayed.
+        Used by [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions], 
+        and [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
 
         Returns
         -------
@@ -192,19 +197,22 @@ class PlottingClass:
         self,
     ) -> None:
         """
-        Plots the cumulative distribution function fit, intended on-top of the existing data.
+        Plots the cumulative distribution function fit, 
+        intended on-top of the existing data.
         Shades two standard deviations around the mean.
 
         Raises
         ------
         KeyError
-            If no fit data is stored in [`ProcessedData`][resdep.experiment.ProcessedData].
+            If no fit data is stored in 
+            [`ProcessedData`][resdep.experiment.ProcessedData].
 
         Tip
         ---
         First requires: (from [`resdep._fitting`][])
 
-        1. Executing [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions] or [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
+        1. Executing [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions] 
+            or [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
         2. Then [`calculate_fitted_energy_stats`][resdep._fitting.FittingClass.calculate_fitted_energy_stats]
         """
         y_model = self.processed_data.y_model
@@ -213,12 +221,12 @@ class PlottingClass:
 
         if len(y_model) == 0:
             raise KeyError(
-                "No fit data to plot. Make sure you have called Fitting().fit_error_functions()."
+                "No fit data to plot." 
+                + " Make sure you have called Fitting().fit_error_functions()."
             )
 
         for key, fit in y_model.items():
-            sector = key.replace("A", "")
-            sector = sector.replace("B", "")
+            sector = re.sub(pattern=r"A*|B*", repl="", string=key)
             # plot fit
             vertical_offset = 0.01 * int(sector)
             self.graph.axes.plot(
@@ -260,7 +268,7 @@ class PlottingClass:
             self.graph.axes.set_ylim(self.ylims)
         except (
             AttributeError
-        ):  # if xlims and ylims aren't defined, do nothing (continue)
+        ):  # if xlims and ylims aren't defined, do nothing
             pass
 
         return None
@@ -277,20 +285,20 @@ class PlottingClass:
         # --- resonance of competing tunes (betatron, synchrotron)
         # plot these resonances around the expected depolarisation resonance
         synchrotron_sidebands = [
-            self.resdep.res_freq + i * (self.resdep.f_rev * self.resdep.v_synch)
+            self.resdep.res_freq + i * (self.resdep.f_rev * const.v_synch)
             for i in [-3, -2, -1, 1, 2, 3]
         ]
 
         for h in range(0, 30, 1):
             v_x_resonance = self.resdep.f_rev * (
-                self.resdep.v_x + h
+                const.v_x + h
             )  # 400 Hz (v_s 0th order ~ 1215 Hz)
-            v_y_resonance = self.resdep.f_rev * (self.resdep.v_y + h)  # 300 Hz
+            v_y_resonance = self.resdep.f_rev * (const.v_y + h)  # 300 Hz
             v_x_mirror_resonance = self.resdep.f_rev * (
-                (1 - self.resdep.v_x) + h
+                (1 - const.v_x) + h
             )  # 400 Hz (v_s 0th order ~ 1215 Hz)
             v_y_mirror_resonance = self.resdep.f_rev * (
-                (1 - self.resdep.v_y) + h
+                (1 - const.v_y) + h
             )  # 300 Hz
             self.graph.axes.axvline(
                 x=v_x_resonance, ymin=0, ymax=0.7, color="blue", linestyle="-"
@@ -497,8 +505,8 @@ class PlottingClass:
         return None
 
     def plot_cusum(self, ) -> None:
-        
-        """Plot CUSUM step detection with ratio loss data
+        """
+        Plot CUSUM step detection with ratio loss data
         """
         n = len(self.processed_data.sectors_to_fit)
         color = plt.cm.inferno(np.linspace(start=0, stop=1, num=n+1)) # type: ignore
@@ -533,6 +541,7 @@ class PlottingClass:
 
     def plot_totvar_denoise(self, eigval: float,mu: float = 0,fused_lasso:bool=False ) -> None:
         """
+        plot total variance denoised data
         """
         self.graph.figure, self.graph.axes = plt.subplots(nrows=3, ncols=1)
 
@@ -552,7 +561,9 @@ class PlottingClass:
         self.graph.draw_idle()
 
     def plot_median_filter(self, ) -> None:
-
+        """
+        Plot ratio loss processed with median filter
+        """
         self.graph.figure, self.graph.axes = plt.subplots(nrows=2, ncols=1)
 
         x = self.processed_data.freqs_array

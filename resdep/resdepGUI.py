@@ -66,7 +66,7 @@ from matplotlib.backends.backend_qt import (
 from matplotlib import rcParams
 
 # resdep
-from resdep.experiment import ResonantDepolarisation, ProcessedData
+from resdep.experiment import ResonantDepolarisation, ProcessedData, SweepDirection
 from resdep._fitting import FittingClass
 from resdep._plotting import PlottingClass, GUIGraph
 
@@ -312,7 +312,7 @@ class MainWindow(QWidget):
         self.fit_results_label = QLabel("")
 
         # add do_fit widgets to list for enabling / disabling in loop
-        self.fit_widgets = [
+        self.fit_widgets: list[Union[QPushButton, QSpinBox, QCheckBox]] = [
             self.button_do_fit,
             self.sigma,
         ]
@@ -649,6 +649,9 @@ class MainWindow(QWidget):
     def on_start_timer(
         self,
     ) -> None:
+        """
+        Starts experiment timer. Connected to injected timer_callback.
+        """
         self.timer.start()
 
     # -------------------------------------------------------------------------
@@ -833,13 +836,9 @@ class MainWindow(QWidget):
         self.resdep.set_kicker_amp = self.kicker_amp.value() / 100
         self.resdep.sweep_rate = self.sweep_rate.value()
         self.resdep.sweep_step_size = self.sweep_step_size.value()
-        if self.sweep_direction.currentText() == "Forward":
-            self.resdep.sweep_direction = 1
-        elif self.sweep_direction.currentText() == "Backward":
-            self.resdep.sweep_direction = -1
-
-        # self.fast_log_frequency
-        # self.slow_log_frequency
+        self.resdep.set_sweep_direction = SweepDirection[
+            self.sweep_direction.currentText().upper()
+        ]
         # ADC masks
         self.resdep.set_adc_counter_offset_1 = self.ADC_offset_1.value()
         self.resdep.set_adc_counter_window_1 = self.ADC_window_1.value()
@@ -990,14 +989,11 @@ class MainWindow(QWidget):
         """
         self.on_status_update("Fitting...")
 
-        checked_sector_checkboxes = cast(
-            list[bool],
-            [
+        checked_sector_checkboxes: list[bool] = [
                 sector_checkbox.isChecked()
                 for sector_checkbox in self.sector_checkboxes
-            ],
-        )
-        self.sectors_to_fit = [
+            ]
+        self.sectors_to_fit: list[int] = [
             _sector
             for _sector, checked in zip(
                 self.sectors, checked_sector_checkboxes

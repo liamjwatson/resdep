@@ -9,32 +9,32 @@ Sweeps the kicker drive frequency over a specified range (the spin tune) and rec
 
 1. Clone this repo:
 
-=== "bitbucket"
+    === "bitbucket"
 
-    ```bash
-    git clone https://bitbucket.synchrotron.org.au/scm/acc/resdep.git
-    ```
+        ```bash
+        git clone https://bitbucket.synchrotron.org.au/scm/acc/resdep.git
+        ```
 
-=== "github"
-    
-    ```bash
-    git clone https://github.com/liamjwatson/resdep.git
-    ```
+    === "github"
+        
+        ```bash
+        git clone https://github.com/liamjwatson/resdep.git
+        ```
 
 2. Navigate to the repo root durectory
 3. Install with from wheel (**OPI**), or standard installation (**pip**):
 
-=== "OPI"
+    === "OPI"
 
-    ```bash
-    bash dist/install_resdep.sh
-    ```
+        ```bash
+        bash dist/install_resdep.sh
+        ```
 
-=== "pip"
+    === "pip"
 
-    ```bash
-    pip install .
-    ```
+        ```bash
+        pip install .
+        ```
 
 
 #### Alternate installation on OPIs

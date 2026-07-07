@@ -12,7 +12,7 @@ Has two manual buttons: "normal scan" and "wide scan"
 ╚════██║██║██║╚██╔╝██║██╔═══╝ ██║     ██╔══╝      ██║   ██║██║   ██║██║
 ███████║██║██║ ╚═╝ ██║██║     ███████╗███████╗    ╚██████╔╝╚██████╔╝██║
 ╚══════╝╚═╝╚═╝     ╚═╝╚═╝     ╚══════╝╚══════╝     ╚═════╝  ╚═════╝ ╚═╝
-"""
+"""     
 
 import datetime
 import time
@@ -73,7 +73,7 @@ class MainWindow(QWidget):
         2. :class:`ProcessedData`
     2. from :mod:`resdep._fitting`
         1. :class:`FittingClass()'
-    """
+    """         
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

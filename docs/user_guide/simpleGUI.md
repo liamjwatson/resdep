@@ -1,4 +1,7 @@
 ## Overview
+
+![simpleGUI](../images/simpleGUI.png "SimpleGUI")
+
 A simple graphical user interface (GUI) for use during user beam before there is a built-in GUI for Kubili. Intended used by operators and physics staff to regularly measure the beam energy. Consists of a results panel (left hand side), a control panel (right hand side), and both progress and status bars. 
 
 The abort button on the control panel sends a fail-safe abort request to the threaded resdep worker. Depending on the status or progress of the experiment, the abort request may not be executed immediately. The status bar should provide more info on the pending abort.
