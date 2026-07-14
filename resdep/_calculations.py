@@ -10,7 +10,7 @@ to significant figures.
 ██║     ██╔══██║██║     ██║     ██║   ██║██║     ██╔══██║   ██║   ██║██║   ██║██║╚██╗██║╚════██║
 ╚██████╗██║  ██║███████╗╚██████╗╚██████╔╝███████╗██║  ██║   ██║   ██║╚██████╔╝██║ ╚████║███████║
  ╚═════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
-"""
+"""                                                 
 from typing import Union, overload, Literal
 import numpy as np
 import numpy.typing as npt
@@ -28,7 +28,7 @@ def energy_calc(
 def energy_calc(
     freq: Union[float, np.floating], f_rev: float, harmonic: int
 ) -> Union[float, np.floating]:
-    """
+    """                                                         
     Frequency (kHz) -> energy (GeV) conversion
 
     Parameters
@@ -44,7 +44,7 @@ def energy_calc(
     -------
     Energy: float | np.floating
         Beam energy, GeV
-    """
+    """                 
 
     return (freq/f_rev - harmonic + 6)*const.m_e*const.c**2/(const.e*const.a_g*1e9) 
 # -----------------------------------------------------------------------------
@@ -75,7 +75,8 @@ def freq_calc(
     -------
     frequency: float | np.floating
         Beam energy, GeV
-    """
+    """                     
+
     return f_rev*(energy*1e9*const.e*const.a_g/(const.m_e*const.c**2) + harmonic - 6)
 # -----------------------------------------------------------------------------
 def tune_calc(energy: float) -> float:
@@ -89,13 +90,20 @@ def tune_calc(energy: float) -> float:
     """
     return const.a_g*const.e*energy*1e9/(const.m_e*const.c**2)
 # -----------------------------------------------------------------------------
+def calculate_sigfigs(value: Union[float, np.floating]) -> int:
+    """
+    Calculate the number of significant figures of a value
+    """
+    return int(np.floor(np.log10(abs(value))))
+# -----------------------------------------------------------------------------
 def round_to_1_sigfig(value: Union[float, np.floating]) -> float:
     """
     Round to one significant figure for fitted beam energy formatting
     """
     if value == 0:
         return 0
-    return float(np.round(value, -int(np.floor(np.log10(abs(value))))))
+    n_sigfigs = calculate_sigfigs(value)
+    return float(np.round(value, -n_sigfigs))
 # -----------------------------------------------------------------------------
 def round_to_error_sigfig(
     value: Union[float, np.floating], error: Union[float, np.floating]
@@ -105,7 +113,8 @@ def round_to_error_sigfig(
     """
     if error == 0:
         return float(value)
-    return float(np.round(value, -int(np.floor(np.log10(np.abs(error))))))
+    n_sigfigs = calculate_sigfigs(error)
+    return float(np.round(value, -n_sigfigs))
 # -----------------------------------------------------------------------------
 def calculate_cusum(
         data: npt.NDArray,

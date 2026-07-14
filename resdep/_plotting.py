@@ -24,6 +24,7 @@ from PySide6.QtCore import QSize
 
 # matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.lines import Line2D
@@ -81,8 +82,10 @@ class StandaloneGraph:
 
     def show(self, block: bool = True):
         plt.show(block=block)
-        # reinitialise the figure
+
+    def new_figure(self,) -> None:
         self.figure, self.axes = plt.subplots()
+
 
 
 # -----------------------------------------------------------------------------
@@ -214,7 +217,7 @@ class PlottingClass:
         1. Executing [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions] 
             or [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
         2. Then [`calculate_fitted_energy_stats`][resdep._fitting.FittingClass.calculate_fitted_energy_stats]
-        """
+        """             
         y_model = self.processed_data.y_model
         E0_mean = self.processed_data.E0_mean
         E0_stddev = self.processed_data.E0_stddev
@@ -223,6 +226,12 @@ class PlottingClass:
             raise KeyError(
                 "No fit data to plot." 
                 + " Make sure you have called Fitting().fit_error_functions()."
+            )
+
+        if not isinstance(self.graph.axes, Axes):
+            raise TypeError(
+                    "graph axes no longer matplotlib.Axes. "
+                    + f"Now is type {type(self.graph.axes)}."
             )
 
         for key, fit in y_model.items():

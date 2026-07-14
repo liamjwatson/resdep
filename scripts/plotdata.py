@@ -41,7 +41,7 @@ mu: str = "\u03bc"
 # --- import data
 
 data_path = Path("Z:/usr/data/resdep")
-data_path = data_path / "2026" / "2026-07-01" / "1007h"
+data_path = data_path / "2026" / "2026-07-07" / "1349h"
 print(f"folder={data_path.name}")
 if not data_path.exists():
     raise FileNotFoundError("Incorrect path")
@@ -118,7 +118,7 @@ resdep.harmonic = harmonic
 resdep.res_freq = res_freq
 
 processed_data = ProcessedData(resdep=resdep)
-processed_data.sectors_to_fit = [1, 3, 8, 14]
+processed_data.sectors_to_fit = [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14]
 processed_data.calculate_ratio_loss(sigma=500, bin=True)
 
 graph = StandaloneGraph()
@@ -693,13 +693,13 @@ if __name__ == "__main__":
     # plot_SR_BPMs_around_MX3_IVU()
     # plot_MX3_BPMs(fixed_limits=True)
 
-    plotting.plot_ratio_loss()
-    graph.show()
+    # plotting.plot_ratio_loss()
+    # graph.show()
     # plotting.plot_step_loss_detection()
     # fitting.fit_error_functions()
     # plotting.plot_fits()
 
-    # plotting.plot_ratio_loss()
+    plotting.plot_ratio_loss()
     # graph.show(block=False)
     # plotting.plot_step_loss_detection()
     # graph.show(block=True)

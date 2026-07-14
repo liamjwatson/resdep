@@ -4,6 +4,8 @@ a_g: float = (g - 2) / 2
 m_e: float = 9.109383713928e-31  # kg
 c: float = 299792458  # m/s
 e: float = 1.602176634e-19  # C
+# estimated revolution frequency
+f_rev: float = 1.38799e3  # kHz
 # * Fractional spin tune
 v_s: float = 0.833  # 6.833
 v_s303GeV: float = 0.879  # 6.879, based on if the beam energy is 3.0311 GeV

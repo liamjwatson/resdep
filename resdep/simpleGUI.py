@@ -4,6 +4,7 @@ Barebones Qt layout for running resdep experiments.
 One button to enable automatic scans during user beam.
 Has two manual buttons: "normal scan" and "wide scan"
 """
+from enum import IntEnum
 
 """
 ███████╗██╗███╗   ███╗██████╗ ██╗     ███████╗     ██████╗ ██╗   ██╗██╗
@@ -58,6 +59,14 @@ from PySide6.QtCore import (
 from resdep.experiment import ProcessedData, ResonantDepolarisation
 from resdep._fitting import FittingClass
 from resdep._archiver import check_recent_beam_injection
+
+class BeamMode(IntEnum):
+    SHUT_DOWN = 1
+    MAINTENANCE = 2
+    MACHINE_STUDIES = 3
+    USER_BEAM_DECAY = 8
+    USER_BEAM_TOP_UP = 9
+    USER_BEAM_EXOTIC = 10
 
 
 class MainWindow(QWidget):
@@ -668,9 +677,8 @@ class MainWindow(QWidget):
         try:  # try block so GUI doesn't crash
             self.processed_data.calculate_ratio_loss(sigma=200, bin=True)
 
-            _, _, fitted_beam_energy_string, error = (
-                self.fitting.automagic_fit()
-            )
+            *_, fitted_beam_energy_string, error = self.fitting.automagic_fit()
+            
 
         except (
             Exception
@@ -682,8 +690,15 @@ class MainWindow(QWidget):
             # update GUI
             if error:
                 self.error_label.setText(error)
+                return None
+
+            self.beam_energy_label.setText(fitted_beam_energy_string)
+            with open(self.data_path / "beam_energy.txt", "w") as f:
+                f.write(fitted_beam_energy_string)
+            if (self.data_path / "beam_energy.txt").exists():
+                logging.debug("beam energy txt file saved successfully.")
             else:
-                self.beam_energy_label.setText(fitted_beam_energy_string)
+                logging.debug("beam energy txt file not saved :(")
 
         # TODO: write to PV????
         # beam_energy_PV.put(E0_mean_sigfig)
@@ -701,7 +716,7 @@ class MainWindow(QWidget):
         scan_type: Literal["automatic", "manual"]
             Automatic scans require the beam mode: "User Beam", while manual scans do not.
 
-        Returns
+        Returnm
         -------
         verdict: bool
             Answer to whether the experiment can run
@@ -715,11 +730,16 @@ class MainWindow(QWidget):
         2. At least 95% beam polarisation
             1. Considers both time since recent injection and last diagnostic scan
         3. Must be in "User Beam" if automatic scans are enabled
-        """
+        """                 
         verdict: bool = False
         error: str = "No error"
 
         self.error_label.setText("")
+        formatted_beam_modes: str = ""
+        for mode in BeamMode:
+            formatted_beam_modes += (
+                    f"{mode.name} = {mode.value}\n"
+            )
 
         if self.checkbox_machine_state_override.isChecked():
             verdict = True
@@ -738,16 +758,19 @@ class MainWindow(QWidget):
                 self.logger.warning(error)
                 return False, error
 
-        beam_mode: Union[int, None] = self.beam_mode_PV.get(timeout=0.1)
+        beam_mode_response: Union[int, None] = self.beam_mode_PV.get(timeout=0.1)
         current: Union[float, None] = self.current_PV.get(timeout=0.1)
         time.sleep(0.5)
 
         # if PVs return None, exit early
-        if beam_mode is None:
+        if beam_mode_response is not None:
+            beam_mode = BeamMode(beam_mode_response)
+        else:
             error = (
                 "beam_mode (FS01:BEAM_MODE_MONITOR) returned None." 
-                + f"Expected any of:\n{self.beam_modes}\n" 
-                +"Aborting request to run resdep."
+                + "Expected any of:\n" 
+                + formatted_beam_modes
+                + "Aborting request to run resdep."
             )
             self.logger.warning(error)
             return False, error
@@ -761,14 +784,21 @@ class MainWindow(QWidget):
             return False, error
 
         # Assume can run, else check for errors
+        is_user_beam: bool = any([
+                beam_mode == BeamMode.USER_BEAM_DECAY,
+                beam_mode == BeamMode.USER_BEAM_TOP_UP,
+                beam_mode == BeamMode.USER_BEAM_EXOTIC
+        ])
+
         scan_type_specific_requirements = [
             scan_type == "automatic"
             and (
-                beam_mode >= 8 or self.checkbox_machine_studies.isChecked()
+                is_user_beam or self.checkbox_machine_studies.isChecked()
             ),  # all user beam modes
             scan_type == "manual",  # manual scans can run anytime
         ]
         recent_beam_injection = check_recent_beam_injection()
+
 
         if all(
             [
@@ -782,34 +812,34 @@ class MainWindow(QWidget):
             verdict = True
         elif current < 150:  # mA
             error = (
-                "Less than 150 mA beam current.\n" 
-                + f"{current:0.0f} mA is not enough resolution for measurement.\n" 
+                "Less than 150 mA beam current. " 
+                + f"{current:0.0f} mA is not enough resolution for measurement. " 
                 + "Aborting request to run resdep."
             )
             self.logger.warning(error)
             return False, error
         elif self.polarisation < 95:  # %
             error = (
-                "Beam polarisation is less than 95%; not enough resolution.\n"
+                "Beam polarisation is less than 95%; not enough resolution. "
                 + "Aborting request to run resdep."
             )
             self.logger.warning(error)
             return False, error
         elif recent_beam_injection:
             error = (
-                "Beam has been injected too recently and has not have enough" 
+                "Beam has been injected too recently and has not have enough " 
                 + "time to polarise (requires at least 39 minutes)."
             )
             self.logger.warning(error)
             return False, error
         elif (
             scan_type == "automatic"
-            and beam_mode < 8
+            and not is_user_beam
             and not self.checkbox_machine_studies.isChecked()
         ):  # not "User Beam" in automatic mode
             error = ("beam_mode (FS01:BEAM_MODE_MONITOR) returned " 
-                     + f"\"{self.beam_modes[beam_mode]}\".\n" 
-                     + "Expected any form of 'User Beam'.\n" 
+                     + f"{beam_mode.name}" 
+                     + "Expected any form of 'User Beam'. " 
                      + "Aborting request to run resdep.")
             self.logger.warning(error)
             return False, error
@@ -939,11 +969,7 @@ class MainWindow(QWidget):
 
                 if answer == QMessageBox.StandardButton.Yes:
                     self.abort()
-                    self.on_status_update(
-                        "Waiting for experiment to finish..."
-                    )
-                    while self._running_experiment:
-                        time.sleep(0.01)
+                    self.wait_for_abort_tasks()
 
                 if answer == QMessageBox.StandardButton.No:
                     self.button_automatic.setEnabled(False)
@@ -991,10 +1017,36 @@ class MainWindow(QWidget):
         """
         Interrupts resdep experiment loop.
         """
-        print("Abort requested!")
+        self.logger.critical("Abort requested!")
         self.disable_abort_button()
+        self._abort_requested = True
         self.resdepQt.abort()
 
+        return None
+    #--------------------------------------------------------------------------
+    def wait_for_abort_tasks(self,) -> None:
+        """
+        Wait for resdep.experiment to finish, setting _running_experiment 
+        to false, then hand back control to the user
+        """
+        self.dialog_wait_for_shutdown = QProgressDialog(
+            parent=self, labelText="Waiting for experiment to shutdown"
+        )
+        self.dialog_wait_for_shutdown.setCancelButton(None)
+        self.dialog_wait_for_shutdown.setMinimum(0)
+        self.dialog_wait_for_shutdown.setMaximum(1)
+        self.dialog_wait_for_shutdown.setWindowTitle("Please Wait")
+        self.dialog_wait_for_shutdown.setWindowModality(
+            Qt.WindowModality.ApplicationModal
+        )
+        self.dialog_wait_for_shutdown.show()
+        while self._running_experiment:
+            # pass control back to the application event loop
+            time.sleep(0.05)
+            QCoreApplication.processEvents()
+        self.dialog_wait_for_shutdown.setValue(1)
+        self.dialog_wait_for_shutdown.close()
+        
         return None
     # *--------------------------------* #
     # *------------- EPICS ------------* #
@@ -1008,14 +1060,6 @@ class MainWindow(QWidget):
         Provides safeguards and automatic disabling of automatic scans.
         """
         #-------------------------------------------------------------------------- Beam Mode --- #
-        self.beam_modes = {
-            1: "Shut down",
-            2: "Maintenance",
-            3: "Machine studies",
-            8: "UserBeam Decay",
-            9: "UserBeam Top Up",
-            10: "UserBeam Exotic",
-        }
 
         self.beam_mode_PV = epics.pv.get_pv(
             "FS01:BEAM_MODE_MONITOR", connect=True, timeout=1
@@ -1032,22 +1076,7 @@ class MainWindow(QWidget):
         """
         if self._running_experiment:
             self.abort()
-            self.dialog_wait_for_shutdown = QProgressDialog(
-                parent=self, labelText="Waiting for experiment to shutdown"
-            )
-            self.dialog_wait_for_shutdown.setMinimum(0)
-            self.dialog_wait_for_shutdown.setMaximum(1)
-            self.dialog_wait_for_shutdown.setWindowTitle("Please Wait")
-            self.dialog_wait_for_shutdown.setWindowModality(
-                Qt.WindowModality.ApplicationModal
-            )
-            self.dialog_wait_for_shutdown.show()
-            while self._running_experiment:
-                # pass control back to the application event loop
-                time.sleep(0.05)
-                QCoreApplication.processEvents()
-            self.dialog_wait_for_shutdown.setValue(1)
-            self.dialog_wait_for_shutdown.close()
+            self.wait_for_abort_tasks()
 
         self.logger.debug("--- simpleGUI shutting down ---")
         shutdown_time = datetime.datetime.now()

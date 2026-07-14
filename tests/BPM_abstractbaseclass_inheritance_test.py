@@ -11,8 +11,15 @@ def test_inherit_without_defining_connect():
         BPMs()
         
 
-def test_if_has_PV_attrs(): 
+def test_type_only_definitions_are_not_attrs(): 
+    """
+    If I have a class, in the init lives
+    x_position_bpms : dict[str, list[float]]
+    etcetera, but without any actual initialisation like = {},
+    then it should fail hasattr
+    """
+
     test_bpms = TestBPMs()
 
-    assert hasattr(test_bpms, "x_position_PVs")
+    assert not hasattr(test_bpms, "x_position_PVs")
 
