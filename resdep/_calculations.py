@@ -87,7 +87,7 @@ def tune_calc(energy: float) -> float:
     ----------
     energy: float
         Energy, GeV
-    """
+    """         
     return const.a_g*const.e*energy*1e9/(const.m_e*const.c**2)
 # -----------------------------------------------------------------------------
 def calculate_sigfigs(value: Union[float, np.floating]) -> int:

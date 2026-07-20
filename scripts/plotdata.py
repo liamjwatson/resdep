@@ -24,8 +24,8 @@ from pathlib import Path
 
 # resdep modules
 from resdep.epicsBPMs import SR_BPMs, MX3_BPMs, TBPMs
-from resdep._plotting import PlottingClass, StandaloneGraph
-from resdep._fitting import FittingClass
+from resdep._plotting import Plotter, StandaloneGraph
+from resdep._fitting import Fitter
 from resdep.experiment import ResonantDepolarisation, ProcessedData
 
 # --- consts
@@ -41,7 +41,7 @@ mu: str = "\u03bc"
 # --- import data
 
 data_path = Path("Z:/usr/data/resdep")
-data_path = data_path / "2026" / "2026-07-07" / "1349h"
+data_path = data_path / "2026" / "2026-07-14" / "1328h"
 print(f"folder={data_path.name}")
 if not data_path.exists():
     raise FileNotFoundError("Incorrect path")
@@ -118,14 +118,14 @@ resdep.harmonic = harmonic
 resdep.res_freq = res_freq
 
 processed_data = ProcessedData(resdep=resdep)
-processed_data.sectors_to_fit = [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14]
-processed_data.calculate_ratio_loss(sigma=500, bin=True)
+processed_data.sectors_to_fit = [1, 3, 8, 14]
+processed_data.calculate_ratio_loss()
 
 graph = StandaloneGraph()
-plotting = PlottingClass(
+plotting = Plotter(
     resdep=resdep, processed_data=processed_data, graph=graph
 )
-fitting = FittingClass(resdep=resdep, processed_data=processed_data)
+fitter = Fitter(resdep=resdep, processed_data=processed_data)
 
 # --- BPMs
 def load_bpm_data(bpms: list[Literal["SR", "MX3", "TBPM"]]) -> None:  
@@ -154,7 +154,7 @@ def load_bpm_data(bpms: list[Literal["SR", "MX3", "TBPM"]]) -> None:
         mx3_bpms.load_from_finished_experiment(path=mx3_path)
         # check keys are in the correct order ([1, 2, 5, 3, 4]):
         correct_bpm_order = ["1", "2", "5", "3", "4"]
-        bpm_order = list[mx3_bpms.x_position.keys()]
+        bpm_order = list(mx3_bpms.x_position.keys())
         if bpm_order != correct_bpm_order: 
             attr_names = ["x_position", "y_position", "intensity"]
             for name in attr_names:
@@ -696,14 +696,17 @@ if __name__ == "__main__":
     # plotting.plot_ratio_loss()
     # graph.show()
     # plotting.plot_step_loss_detection()
-    # fitting.fit_error_functions()
+    # fitter.fit_error_functions()
     # plotting.plot_fits()
 
     plotting.plot_ratio_loss()
+    *_, formatted_beam_energy, _ = fitter.automagic_fit()
+    plotting.plot_fits()
+    print(formatted_beam_energy)
     # graph.show(block=False)
     # plotting.plot_step_loss_detection()
     # graph.show(block=True)
-    # fitting.automagic_fit()
+    # fitter.automagic_fit()
     # print(processed_data.fitted_beam_energy_str)
     # plotting.plot_ratio_loss()
     # plotting.plot_fits()

@@ -91,7 +91,7 @@ class StandaloneGraph:
 # -----------------------------------------------------------------------------
 
 
-class PlottingClass:
+class Plotter:
     """Helper class for plotting beam loss data generated from the 
     Resonant Depolarisation experiment.
 
@@ -121,6 +121,7 @@ class PlottingClass:
         self.graph = graph
         # defaults
         self.mask: Union[npt.NDArray[np.bool_], "builtins.ellipsis"] = ...
+        self.OFFSET_SCALING_FACTOR = 0.1
 
     # -------------------------------------------------------------------------
     def plot_ratio_loss(
@@ -141,9 +142,11 @@ class PlottingClass:
         """
         try:
             x = self.processed_data.freqs_array
-            for sector, loss in self.processed_data.ratio_loss.items():
+            for index, (sector, loss) in enumerate(
+                    self.processed_data.ratio_loss.items()
+                ):
                 y = loss
-                vertical_offset = 0.01 * int(sector[:-1])
+                vertical_offset = index * self.OFFSET_SCALING_FACTOR
                 self.graph.axes.plot(x, y + vertical_offset, label=sector)
 
             self.graph.axes.legend(
@@ -173,8 +176,8 @@ class PlottingClass:
         Grabs the current limits of the interactive plot 
         (including when it is zoomed in) and calculates 
         the frequency range displayed.
-        Used by [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions], 
-        and [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
+        Used by [`fit_error_functions`][resdep._fitting.Fitter.fit_error_functions], 
+        and [`automagic_fit`][resdep._fitting.Fitter.automagic_fit].
 
         Returns
         -------
@@ -214,9 +217,9 @@ class PlottingClass:
         ---
         First requires: (from [`resdep._fitting`][])
 
-        1. Executing [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions] 
-            or [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
-        2. Then [`calculate_fitted_energy_stats`][resdep._fitting.FittingClass.calculate_fitted_energy_stats]
+        1. Executing [`fit_error_functions`][resdep._fitting.Fitter.fit_error_functions] 
+            or [`automagic_fit`][resdep._fitting.Fitter.automagic_fit].
+        2. Then [`calculate_fitted_energy_stats`][resdep._fitting.Fitter.calculate_fitted_energy_stats]
         """             
         y_model = self.processed_data.y_model
         E0_mean = self.processed_data.E0_mean
@@ -234,10 +237,10 @@ class PlottingClass:
                     + f"Now is type {type(self.graph.axes)}."
             )
 
-        for key, fit in y_model.items():
+        for index, (key, fit) in enumerate(y_model.items()):
             sector = re.sub(pattern=r"A*|B*", repl="", string=key)
             # plot fit
-            vertical_offset = 0.01 * int(sector)
+            vertical_offset = index * self.OFFSET_SCALING_FACTOR
             self.graph.axes.plot(
                 self.processed_data.freqs_array[self.processed_data.mask],
                 fit + vertical_offset,
@@ -467,8 +470,8 @@ class PlottingClass:
             self.graph.axes[1].plot(x, y)  # + 0.1 * float(sector), label=f"{sector}B")
 
         # data points?
-        n_data_points = len(x)  # type:ignore
-        freq_range = x[-1] - x[0]  # type:ignore
+        n_data_points = len(x)
+        freq_range = x[-1] - x[0]  
         data_point_spacing = np.round(1e3 * freq_range / n_data_points, 1)  # Hz
         print(f"data point spacing = {data_point_spacing} Hz")
 

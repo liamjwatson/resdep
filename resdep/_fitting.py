@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 class FittingError(Exception):
     pass
 
-class FittingClass:
+class Fitter:
     """
     Fitting class for resdep. Fits error functions to ratio loss data.
 
@@ -46,7 +46,9 @@ class FittingClass:
     by helper functions.
     """
     def __init__(
-            self, processed_data: "ProcessedData", resdep: "ResonantDepolarisation"
+            self, 
+            processed_data: "ProcessedData", 
+            resdep: "ResonantDepolarisation"
     ):
         self.processed_data = processed_data
         self.resdep = resdep
@@ -401,7 +403,7 @@ class FittingClass:
             standard deviation allows.
         E0_stddev_sigfig: float
             Two standard deviations of the mean energy to one significant figure
-        fitted_beam_energy_str: str
+        formatted_beam_energy: str
             Mean energy plus minus two standard deviations, all quoted to the 
             appropirate number of sigfigs, as a formatted str. 
             Example: 3.030287 GeV \u00b1 7 keV
@@ -409,8 +411,8 @@ class FittingClass:
         Tip
         ---
         First requires executing 
-        [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions]
-        """
+        [`fit_error_functions`][resdep._fitting.Fitter.fit_error_functions]
+        """                 
 
         energies: dict[str, float] = self.processed_data.fitted_beam_energies
         stddevs: dict[str, float] = (
@@ -431,7 +433,7 @@ class FittingClass:
         E0_mean_sigfig: float = round_to_error_sigfig(
             E0_mean, E0_stddev_sigfig
         )
-        fitted_beam_energy_str = (
+        formatted_beam_energy = (
                 f"{E0_mean_sigfig:0.{-n_sigfigs}f} GeV"
                 + " \u00b1 "
                 + f"{E0_stddev_sigfig * 1e6:.0f} keV"
@@ -441,14 +443,14 @@ class FittingClass:
         self.processed_data.E0_stddev = E0_stddev
         self.processed_data.E0_mean_sigfig = E0_mean_sigfig
         self.processed_data.E0_stddev_sigfig = E0_stddev_sigfig
-        self.processed_data.fitted_beam_energy_str = fitted_beam_energy_str
+        self.processed_data.formatted_beam_energy = formatted_beam_energy
 
         return (
             E0_mean,
             E0_stddev,
             E0_mean_sigfig,
             E0_stddev_sigfig,
-            fitted_beam_energy_str,
+            formatted_beam_energy,
         )
     # -------------------------------------------------------------------------
     def find_step_change_in_beam_loss(
@@ -460,7 +462,7 @@ class FittingClass:
             - Kicker amplitude = 50% 
             - Sweep rate = 5 Hz/s
         Forms part of 
-        [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit].
+        [`automagic_fit`][resdep._fitting.Fitter.automagic_fit].
 
         Returns
         -------
@@ -560,7 +562,7 @@ class FittingClass:
             Fitted beam energy quoted to the number of 
             significant figures in the error.
 
-        fitted_beam_energy_string: str
+        formatted_beam_energying: str
             Formatted beam energy string of the form:
                 \"`E0` GeV \u00b1 `error` keV\"
             where the energy is quoted to the number of 
@@ -597,13 +599,13 @@ class FittingClass:
                     "Is everything okay with the machine?"
                 )
 
-            E0_mean, _, E0_mean_sigfig, _, fitted_beam_energy_str = (
+            E0_mean, _, E0_mean_sigfig, _, formatted_beam_energy = (
                 self.calculate_fitted_energy_stats()
             )
 
-            logging.info(f"Mean beam energy = {fitted_beam_energy_str}")
+            logging.info(f"Mean beam energy = {formatted_beam_energy}")
 
-            return E0_mean, E0_mean_sigfig, fitted_beam_energy_str, error
+            return E0_mean, E0_mean_sigfig, formatted_beam_energy, error
 
 if __name__ == "__main__":
     print(

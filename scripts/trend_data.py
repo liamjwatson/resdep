@@ -3,6 +3,7 @@
 Trend beam energy over time. 
 Try to correlate with other variables like temperature.
 """   
+import matplotlib.dates
 from dataclasses import dataclass, field
 import itertools
 import re
@@ -16,8 +17,8 @@ import numpy.typing as npt
 import matplotlib.pyplot as plt
 
 from resdep.experiment import ProcessedData, ResonantDepolarisation
-from resdep._fitting import FittingClass, FittingError
-from resdep._plotting import StandaloneGraph, PlottingClass
+from resdep._fitting import Fitter, FittingError
+from resdep._plotting import StandaloneGraph, Plotter
 
 
 @dataclass
@@ -181,38 +182,38 @@ def create_data_objects(
 
     return processed_data, resdep
 
-def get_beam_energies(data_paths: list[Path]) -> tuple[list[float], ...]:
+def get_beam_energies(data_paths: list[Path]) -> tuple[npt.NDArray, ...]:
 
-    energies: list[float] = []
-    errors: list[float] = []
+    energies: npt.NDArray = np.zeros_like(data_paths, dtype=float)
+    errors: npt.NDArray = np.zeros_like(data_paths, dtype=float)
 
-    for path in data_paths:
+    for index, path in enumerate(data_paths):
         beam_energy_path = path / "beam_energy.txt"
         if beam_energy_path.exists():
             with open(beam_energy_path, "r") as f:
                 formatted_beam_energy: str = f.readline()
 
             energy, error = match_beam_energy_string(formatted_beam_energy)
-            energies.append(energy)
-            errors.append(error)
+            energies[index] = energy
+            errors[index] = error
 
         else: # if there is no beam_energy.txt, do manual data analysis
             print(f"Manually calulating data from {path}.")
             processed_data, resdep = create_data_objects(data_path=path)
-            processed_data.calculate_ratio_loss(sigma=500, bin=True)
-            fitting = FittingClass(
+            processed_data.calculate_ratio_loss()
+            fitter = Fitter(
                     resdep=resdep, processed_data=processed_data
             )
             try:
-                *_, formatted_beam_energy, _ = fitting.automagic_fit()
+                *_, formatted_beam_energy, _ = fitter.automagic_fit()
 
                 energy, error = match_beam_energy_string(formatted_beam_energy)
-                energies.append(energy)
-                errors.append(error)
+                energies[index] = energy
+                errors[index] = error
 
             except FittingError:
-                energies.append(np.nan)
-                errors.append(np.nan)
+                energies[index] = np.nan
+                errors[index] = np.nan
                 continue 
 
     return energies, errors
@@ -291,17 +292,18 @@ def trend_fit_quality(dates: list[str]) -> None:
     )
     if response == "y":
         writing_results = True
+
     data_paths = get_data_paths(dates)
 
     graph = StandaloneGraph()
 
     for path in data_paths:
         processed_data, resdep = create_data_objects(data_path=path)
-        processed_data.calculate_ratio_loss(sigma=1000, bin=True)
-        fitting = FittingClass(
+        processed_data.calculate_ratio_loss()
+        fitter = Fitter(
                 resdep=resdep, processed_data=processed_data
         )
-        plotting = PlottingClass(
+        plotting = Plotter(
                 resdep=resdep, processed_data=processed_data, graph=graph
         )
         
@@ -316,7 +318,7 @@ def trend_fit_quality(dates: list[str]) -> None:
             ratio_loss_difference[key] = (
                     loss[RESONANCE_WIDTH_ARG:]
                     - loss[:-RESONANCE_WIDTH_ARG]
-            )
+            )/RESONANCE_WIDTH
             # padding
             ratio_loss_difference[key] = np.insert(
                     arr = ratio_loss_difference[key],
@@ -334,7 +336,7 @@ def trend_fit_quality(dates: list[str]) -> None:
             ]
             step_locations.append(x_at_y_max)
             # plot
-            vertical_offset = index * 0.5
+            vertical_offset = index * 0.5 / RESONANCE_WIDTH
             graph.axes.plot(
                     processed_data.freqs_array,
                     ratio_loss_difference[key] + vertical_offset,
@@ -368,7 +370,8 @@ def trend_fit_quality(dates: list[str]) -> None:
             processed_data.freqs_array < step_upper_bound,
         )
         processed_data.mask = mask
-        graph.show(block=False)
+
+        graph.show()
         graph.new_figure()
 
 
@@ -377,20 +380,21 @@ def trend_fit_quality(dates: list[str]) -> None:
         #plotting.plot_cusum()
 
         try:
-            # plotting.plot_ratio_loss()
-            *_, fitted_beam_energy_str, error = fitting.automagic_fit()
-            # plotting.plot_fits()
-            print(fitted_beam_energy_str)
+            plotting.plot_ratio_loss()
+            *_, formatted_beam_energy, error = fitter.automagic_fit()
+            print(formatted_beam_energy)
+            plotting.plot_fits()
+            graph.show()
+            graph.new_figure()
             if writing_results:
                 with open(path / "beam_energy.txt", "w") as f:
-                    f.write(fitted_beam_energy_str)
+                    f.write(formatted_beam_energy)
             # graph.show()
             # graph.new_figure()
             # graph.show()
         except FittingError:
             print(f"Could not fit data from {path}")
         
-
 def estimate_resonance_width(dates: list[str]) -> None:
     """
     loop through difference resonance width, look for best snr
@@ -402,11 +406,11 @@ def estimate_resonance_width(dates: list[str]) -> None:
 
     for path in data_paths:
         processed_data, resdep = create_data_objects(data_path=path)
-        processed_data.calculate_ratio_loss(sigma=1000, bin=True)
-        fitting = FittingClass(
+        processed_data.calculate_ratio_loss()
+        fitter = Fitter(
                 resdep=resdep, processed_data=processed_data
         )
-        plotting = PlottingClass(
+        plotting = Plotter(
                 resdep=resdep, processed_data=processed_data, graph=graph
         )
         
@@ -473,9 +477,150 @@ def estimate_resonance_width(dates: list[str]) -> None:
         graph.show()
         graph.new_figure()
 
+def trend_with_RF_frequency(dates: list[str]) -> None:
+
+    data_paths = get_data_paths(dates)
+    print("got paths")
+
+    RF_frequencies = np.zeros_like(data_paths, dtype=float)
+    for index, path in enumerate(data_paths):
+        with open(path / "metadata.json", "r") as f:
+            metadata = json.load(f)
+        f_rev = metadata["f_rev"]
+        master_rf = f_rev * 360 * 1e-3  # MHz
+        RF_frequencies[index] = master_rf
+
+    print("got RF frequencies")
+
+    timestamps, datetimes = get_timestamps(data_paths)
+    npdatetimes = matplotlib.dates.date2num(datetimes)
+    print("got timestamps")
+    energies, errors = get_beam_energies(data_paths)
+    errors_GeV = errors * 1e-6
+    print("got energies")
+
+    fig, axs = plt.subplots(2, 1, figsize=(6,6), layout="tight", sharex=True)
+    cmap = plt.get_cmap("inferno")
+
+    axs[0].errorbar(
+            x=npdatetimes, 
+            y=energies, 
+            yerr=errors_GeV, 
+            fmt='o',
+            alpha=0.6,
+            color=cmap(50)
+    )
+    # axs[0].plot_date(npdatetimes, energies, linestyle="--")
+    axs[1].plot_date(
+            npdatetimes, 
+            RF_frequencies, 
+            color=cmap(150),
+            linestyle="None",
+    )
+
+    axs[0].set_ylabel("Beam energy (GeV)")
+    axs[1].set_ylabel("Master RF (MHz)")
+    axs[1].set_xlabel("datetime")
+
+    fig.suptitle("Beam energy trend with master RF")
+
+    # rotate timestamp strings 90 degrees
+    for ax in axs:
+        ax.tick_params("x", rotation=60)
+
+    # prevent scientific notation axes
+    for ax in axs:
+        ax.ticklabel_format(useOffset=False, axis="y")
+
+    response = input("Save figure? (y/n)\n")
+    if response == "y":
+        cwd = Path.cwd()
+        filepath = cwd / "figures" / "trend_beam_energy_with_RF.png"
+        plt.savefig(
+                filepath,
+                dpi=300,
+                bbox_inches="tight",
+                facecolor="white",
+                transparent=False,
+        )
+
+    plt.show()
+
+    response = input("Calculate momentum compaction factor? (y/n)\n")
+    if response == "y":
+        momentum_compaction_factor = calculate_momentum_compaction_factor(
+                energies,
+                RF_frequencies,
+        )
+
+def calculate_momentum_compaction_factor(
+        energies: npt.NDArray,
+        frequencies: npt.NDArray
+        ) -> float:
+    """
+    Calculate alpha, the momentum compaction factor, the change in the electron 
+    orbit as a function of energy.
+    Its the gradient of the change in the energy over the change in the RF 
+    cavity frequency (master)
+
+    Parameters
+    ----------
+    energies: npt.NDArr
+    """
+
+    mean_energy: np.floating = energies.mean()
+    mean_frequency: np.floating = frequencies.mean()
+
+    residual_energy: npt.NDArray = energies - mean_energy
+    residual_frequency: npt.NDArray = frequencies - mean_frequency
+
+    change_in_energy = residual_energy / mean_energy
+    change_in_frequency = residual_frequency / mean_frequency
+    change_in_energy.sort()
+    change_in_frequency.sort()
+
+    popt: npt.NDArray = np.polyfit(
+            x=change_in_energy,
+            y=change_in_frequency,
+            deg=1
+    )
+    momentum_compaction_factor = popt[0]
+    vertical_offset = popt[1]
+    print(f"popt={popt}")
+    # -- calculate goodness of fit
+    # residual sum of squares
+    y_fit = momentum_compaction_factor * change_in_energy + vertical_offset
+    ss_res = np.sum((change_in_frequency - y_fit) ** 2)
+    # total sum of squares
+    ss_tot = np.sum((change_in_frequency - np.mean(change_in_frequency)) ** 2)
+    # r-squared
+    r2 = 1 - (ss_res / ss_tot)
+
+    # plot 
+    fig, axs = plt.subplots(1, 1, figsize=(6,6), layout="tight")
+    fig.suptitle("Momentum compaction factor")
+    
+    axs.scatter(change_in_energy, change_in_frequency, color="indigo")
+    axs.set_xlabel(r"$\Delta E/E$")
+    axs.set_ylabel(r"$\Delta f_\mathrm{rf}/f_\mathrm{rf}$")
+
+    axs.plot(
+            change_in_energy, 
+            y_fit, 
+            linestyle="--", 
+            color="mediumpurple",
+            label=r"$r^2$"+f" = {r2:0.2f}"
+    )
+
+    plt.legend()
+    plt.show()
+
+
+    return momentum_compaction_factor
 
 
 if __name__ == "__main__":
-    #dates: list[str] = ["2026-07-11", "2026-07-12", "2026-07-13"]
-    dates: list[str] = ["2026-07-13"]
-    estimate_resonance_width(dates)
+    dates: list[str] = []
+    for day in range(11,17+1,1):
+        dates.append(f"2026-07-{day:02d}")
+    trend_fit_quality(dates)

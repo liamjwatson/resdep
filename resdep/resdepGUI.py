@@ -67,8 +67,8 @@ from matplotlib import rcParams
 
 # resdep
 from resdep.experiment import ResonantDepolarisation, ProcessedData, SweepDirection
-from resdep._fitting import FittingClass
-from resdep._plotting import PlottingClass, GUIGraph
+from resdep._fitting import Fitter
+from resdep._plotting import Plotter, GUIGraph
 
 
 ##########################
@@ -107,10 +107,10 @@ class MainWindow(QWidget):
 
         # helper classes
         self.processed_data = ProcessedData(resdep=self.resdep)
-        self.fitting = FittingClass(
+        self.fitter = Fitter(
             resdep=self.resdep, processed_data=self.processed_data
         )
-        # ... self.plotting initialised in _init_plot_pane() due to
+        # ... self.plotter initialised in _init_plot_pane() due to
         # plot canvas attribute
 
         # init path
@@ -482,7 +482,7 @@ class MainWindow(QWidget):
         self.top_layout.addWidget(plot_pane)
 
         # pass to _plotting
-        self.plotting = PlottingClass(
+        self.plotter = Plotter(
             resdep=self.resdep,
             processed_data=self.processed_data,
             graph=self.graph,
@@ -571,8 +571,11 @@ class MainWindow(QWidget):
         Updates the GUI plot with the latest ratio loss data
         """
         self.graph.axes.clear()
-        self.processed_data.calculate_ratio_loss(sigma=self.sigma.value())
-        self.plotting.plot_ratio_loss()
+        self.processed_data.calculate_ratio_loss(
+                smoothing_mode="gaussian_filter",
+                sigma=self.sigma.value()
+        )
+        self.plotter.plot_ratio_loss()
 
         return None
 
@@ -859,7 +862,7 @@ class MainWindow(QWidget):
             self.resdep._measuring_MX3_BPMs = False
 
         # calculate range
-        self.resdep.calculate_range()
+        self.resdep._calculate_range()
 
         # update the sweep time | dwell time | progress bar
         self.estimated_time.setText(self.resdep.estimated_sweep_time)
@@ -879,7 +882,7 @@ class MainWindow(QWidget):
         """
         self.update_experiment_settings()
         self.graph.axes.clear()
-        self.plotting.plot_expected_resonances()
+        self.plotter.plot_expected_resonances()
 
         return None
 
@@ -1014,9 +1017,9 @@ class MainWindow(QWidget):
             return None
 
         try:
-            self.plotting.calculate_fitting_mask()
+            self.plotter.calculate_fitting_mask()
             self.on_new_plot_info()
-            y_model, _, _, fit_results = self.fitting.fit_error_functions()
+            y_model, _, _, fit_results = self.fitter.fit_error_functions()
 
             if len(y_model) == 0:  # if all fits fail
                 print("Fit results:\n", fit_results)
@@ -1025,17 +1028,17 @@ class MainWindow(QWidget):
             if (
                 len(self.sectors_to_fit) > 1
             ):  # calc stddev of means if multiple fits
-                self.fitting.calculate_fitted_energy_stats()
+                self.fitter.calculate_fitted_energy_stats()
             else:  # use stddev of fit if only one fit
-                self.fitting.calculate_fitted_energy_stats()
+                self.fitter.calculate_fitted_energy_stats()
 
-            self.plotting.plot_fits()
+            self.plotter.plot_fits()
 
-            print(f"mean E0 = {self.processed_data.fitted_beam_energy_str}")
+            print(f"mean E0 = {self.processed_data.formatted_beam_energy}")
             print("Fit results:\n", fit_results)
             # update GUI
             self.fitted_beam_energy_label.setText(
-                self.processed_data.fitted_beam_energy_str
+                self.processed_data.formatted_beam_energy
             )
             self.fit_results_label.setText(fit_results)
 

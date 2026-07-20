@@ -25,13 +25,14 @@ Can also be instanced and run natively in command line.
 ██║╚════██║██╔══██║   ██║   ██║██║   ██║██║╚██╗██║
 ██║███████║██║  ██║   ██║   ██║╚██████╔╝██║ ╚████║
 ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═══╝                                                                       
-"""
+"""                         
 
+import itertools
 from dataclasses import dataclass, field
 from enum import IntEnum
 import platform
 import builtins
-from typing import Union, Callable, Optional
+from typing import Union, Callable, Optional, Literal
 import logging
 import traceback
 import epics
@@ -45,10 +46,10 @@ import numpy.typing as npt
 from math import ceil
 from scipy.ndimage import gaussian_filter1d
 
-from resdep.epicsBLMs import BLMs # Libera BLM instuments
+from resdep.epicsBLMs import BLMs, CountingMode # Libera BLM instuments
 from resdep.epicsBPMs import SR_BPMs, MX3_BPMs, TBPMs  # BPM subclasses
-from resdep._plotting import PlottingClass, StandaloneGraph
-from resdep._fitting import FittingClass
+from resdep._plotting import Plotter, StandaloneGraph
+from resdep._fitting import Fitter
 import resdep._constants as const
 from resdep._progressBars import printProgressBar
 
@@ -58,6 +59,12 @@ class SweepDirection(IntEnum):
     """
     BACKWARD = -1
     FORWARD = 1
+
+class InjectionMode(IntEnum):
+    UNDEFINED = 0
+    FAKE_INJECTION = 1 
+    GUN_INJECTION = 2
+    UNKNOWN = 3
 
 class ResonantDepolarisation:
     """
@@ -94,8 +101,8 @@ class ResonantDepolarisation:
         One set of the ADC (analog to digital converter) offset / window 
         applied to the beam loss monitors.
         Used to separate the beam into two charge equivalent halves, 
-        only one of which is depolarised.
-        The ratio of the losses between the polarised and depolarised halves 
+        only one of which is _depolarised.
+        The ratio of the losses between the polarised and _depolarised halves 
         are used to indicate the spin tune.
 
     freqs: list[float]
@@ -114,17 +121,17 @@ class ResonantDepolarisation:
 
     Warning
     -------
-    `sweep_rate` values over 10 Hz/s may be too fast to effectively depolarise.
+    `sweep_rate` values over 10 Hz/s may be too fast to effectively _depolarise.
 
     Note
     ----
     This Class is passed by reference when instancing the 
     [processed data][resdep.experiment.ProcessedData] class,
-    and helper classes for [fitting][resdep._fitting.FittingClass] and 
-    [plotting][resdep._plotting.PlottingClass].
+    and helper classes for [fitter][resdep._fitting.Fitter] and 
+    [plotting][resdep._plotting.Plotter].
     This is to access exact experiment parameters that change slightly between 
     each sweep, such as revolution frequency.
-    """
+    """                                                                     
     def __init__(
         self,
         progress_callback: Optional[Callable] = None,
@@ -134,7 +141,8 @@ class ResonantDepolarisation:
         timer_callback: Optional[Callable] = None,
         ADC_windows_callback: Optional[Callable] = None,
     ) -> None:
-        """Initialise default scan values.
+        """
+        Initialise default scan values.
 
         Parameters
         ----------
@@ -185,10 +193,10 @@ class ResonantDepolarisation:
         [`QtWorkerDecorator`][resdep.resdepGUI.QtWorkerDecorator] 
         and the [GUI][resdep.resdepGUI.MainWindow.__init__].
 
-        Calls [`calculate_range`][resdep.experiment.ResonantDepolarisation.calculate_range] 
+        Calls [`_calculate_range`][resdep.experiment.ResonantDepolarisation._calculate_range] 
         on default values.
         """                                               
-        self.config_logger()
+        self._config_logger()
 
         self.progress_callback = progress_callback
         self.plot_callback = plot_callback
@@ -208,11 +216,11 @@ class ResonantDepolarisation:
         self._measuring_MX3_BPMs: bool = False
 
         # default f_rev. Will calculate f_rev from masterRF on experiment start
-        # (so to avoid any epics connection on GUI start)
+        # (so to avoid any epics connection on init)
         self.f_rev: float = const.f_rev  # kHz
 
         # --- experimental variables
-        self.direction: str = "Y"  # 'X' or 'Y'
+        self.direction: Literal["X", "Y"] = "Y"  # 'X' or 'Y'
         self.tune: float = const.v_s303GeV  # v_s, or v_s303GeV
         self.harmonic: int = 1  # int >= 0
         self.bounds: float = 0.05 / 100  # input %, output decimal
@@ -234,8 +242,8 @@ class ResonantDepolarisation:
         self.set_adc_counter_window_1: int = 42
         self.set_adc_counter_offset_2: int = 42
         self.set_adc_counter_window_2: int = 44
-        self.set_counting_mode: int = (
-            0  # 0: differential, 1: normal (thresholding)
+        self.set_counting_mode: CountingMode = (
+                CountingMode.DIFFERENTIAL
         )
 
         # initialise some data storage early for GUI plot purposes
@@ -246,7 +254,7 @@ class ResonantDepolarisation:
         self.res_freq: float = 1225
         self.data_path: Path
 
-        self.calculate_range()
+        self._calculate_range()
 
         return None
     # *--------------------------------* #
@@ -257,7 +265,7 @@ class ResonantDepolarisation:
     ) -> None:
         """
         Resonant depolarisation experiment, uses bunch-by-bunch kicker to 
-        depolarise bunches, and measures the corresponding beam loss.
+        _depolarise bunches, and measures the corresponding beam loss.
         
         Attributes
         ----------
@@ -282,37 +290,37 @@ class ResonantDepolarisation:
         - Slowly steps through the requested energy (frequency) range 
             (typically at 5 Hz/s, physically updates drive frequency in 0.5 Hz steps)
         - Configures the `adc_counts_offset` and `_window` to record beam loss 
-            on the polarised and depolarised parts of the beam separately
-        - The ratio of the depolarised/polarised beam losses will then 
+            on the polarised and _depolarised parts of the beam separately
+        - The ratio of the _depolarised/polarised beam losses will then 
             normalise out spurrious depolarisation events, 
             e.g. ID gap changes, magnet instabilities, etc.
         - Reads the beam loss for every monitor (readback at 10 Hz). 
-            See [`log_data`][resdep.experiment.ResonantDepolarisation.log_data].
+            See [`_log_data`][resdep.experiment.ResonantDepolarisation._log_data].
         - When finished
             - Turns off kicker drive and resets BLM decimation / ADC windows.
             - Saves and plots data on experiment end or [`KeyboardInterrupt`][]
         - Listens for injections -> turns off kicker and sleeps for 10 s (
             through PV callback 
-            [`onValueChange`][resdep.experiment.ResonantDepolarisation.onValueChange]
+            [`_on_value_change`][resdep.experiment.ResonantDepolarisation._on_value_change]
         )
         - Listens for abort requests from the optional GUIs
         - Updates experiment progress to progress bar on GUI or console
         """                                         
 
-        self.data_collected: bool = False
+        self._has_stored_data: bool = False
 
         try:  # if any of this fails then the experiment should shutdown
 
             # --- start-up
-            self.config_data_path()
-            self.calcf_revfromMasterRF()
-            self.calculate_range()
+            self._config_data_path()
+            self._calc_revolution_frequency_from_master_RF()
+            self._calculate_range()
             self.status_callback("Setting up PVs...")
-            self.load_PVs()
-            self.config_save_objects()
+            self._load_PVs()
+            self._config_save_objects()
             self.calculate_adc_counter_windows(sector=1)
 
-            self.injection_trigger.add_callback(callback=self.onValueChange)
+            self.injection_trigger.add_callback(callback=self._on_value_change)
 
             self.blm.apply_full_decimation()
             self.blm.apply_adc_counter_masks(
@@ -328,10 +336,10 @@ class ResonantDepolarisation:
             self.logger.info("|---------- Resonant Depolarisation ---------|")
             self.logger.info("|--------------------------------------------|")
             
-            self.collect_baseline_data(duration_seconds=10)
-            self.data_collected = True
+            self._collect_baseline_data(duration_seconds=10)
+            self._has_stored_data = True
 
-            self.depolarise()
+            self._depolarise()
 
         except Exception:
             self.logger.error(traceback.format_exc())
@@ -346,7 +354,7 @@ class ResonantDepolarisation:
             if self.progress_callback is not None:
                 self.progress_callback(self.sweep_steps)
 
-            if self.data_collected:
+            if self._has_stored_data:
                 self.save_data()
             else:
                 self.logger.warning("No data collected, files will not be saved.")
@@ -360,9 +368,9 @@ class ResonantDepolarisation:
             except AttributeError:
                 self.logger.critical(
                     "Kicker PV not loaded, not able to turn off."
-                    + "Shouldn't have been turned on in the first place "
-                    + "if the PV isn't loaded, but you should check the BbB "
-                    + "just in case."
+                    + "If PV not loaded, the kicker shouldn't be on anyway. "
+                    + "Check the BbB Y DRIVE just in case: \n"
+                    + "IGPF:Y:DRIVE:AMPL"
                 )
 
             try:
@@ -383,14 +391,14 @@ class ResonantDepolarisation:
                 self.logger.info(
                     "To manually plot data from the terminal, "
                      + "run class method `plot_data()`, "
-                     + "or scripts\\plotdata.py"
+                     + "or edit and run scripts\\plotdata.py"
                 )
 
             self.logger.info("Done everything :)")
 
         return None
     # -------------------------------------------------------------------------
-    def collect_baseline_data(self, duration_seconds: int) -> None:
+    def _collect_baseline_data(self, duration_seconds: int) -> None:
         """
         Collect baseline BLM / BPM / whatever save data with kicker OFF
 
@@ -425,20 +433,20 @@ class ResonantDepolarisation:
             time.sleep(0.05)
 
 
-        end_time = time.time() + duration_seconds
+        end_time: float = time.time() + duration_seconds
 
         while time.time() <= end_time:
-            self.log_data()
+            self._log_data()
             if self._abort_requested:
                 self.status_callback("Experiment interrupted!")
                 raise InterruptedError
 
-            time.sleep(1 / self.log_frequency)
+            time.sleep(1/self.log_frequency)
 
 
         return None
     # -------------------------------------------------------------------------
-    def depolarise(self, ) -> None:
+    def _depolarise(self, ) -> None:
         """
         The resonant depolarisation experiment loop.
         The details of the experiment workflow are under 
@@ -449,39 +457,39 @@ class ResonantDepolarisation:
         while not self.kicker_amp_PV.put_complete:
             time.sleep(0.05)
             
-        self.step: int = 0
+        step: int = 0
         self.status_callback("Running")
         if self.timer_callback is not None:
             self.timer_callback()
 
         next_kicker_call: float = time.time() + self.dwell_time
         next_log_call: float = time.time() + 1/self.log_frequency
-        PROGRESS_UPDATE_FREQUENCY = 1 # Hz
+        PROGRESS_UPDATE_FREQUENCY: int = 1 # Hz
         next_progress_update_call: float = (
             time.time() + 1/PROGRESS_UPDATE_FREQUENCY
         )
         
-        while self.step <= self.sweep_steps:
-            now = time.time()
+        while step <= self.sweep_steps:
+            now: float = time.time()
 
             if now >= next_kicker_call:
                 self.set_sweep_freq += (
                     self.set_sweep_direction * self.sweep_step_size * 1e-3
                 )  # kHz
                 self.sweep_freq_PV.put(self.set_sweep_freq)  # kHz
-                self.step += 1
-                next_kicker_call = time.time() + self.dwell_time
+                step += 1
+                next_kicker_call: float = time.time() + self.dwell_time
 
             if now >= next_log_call:
-                self.log_data()
-                next_log_call = time.time() + 1/self.log_frequency
+                self._log_data()
+                next_log_call: float = time.time() + 1/self.log_frequency
 
             if now >= next_progress_update_call:
                 if self.progress_callback is not None:
-                    self.progress_callback(self.step)
+                    self.progress_callback(step)
                 else:
                     printProgressBar(
-                        iteration=self.step,
+                        iteration=step,
                         total=self.sweep_steps,
                         decimals=2,
                     )
@@ -491,7 +499,7 @@ class ResonantDepolarisation:
                         self.beam_loss_window_1,
                         self.beam_loss_window_2,
                     )
-                next_progress_update_call = (
+                next_progress_update_call: float = (
                     time.time() + 1/PROGRESS_UPDATE_FREQUENCY                    
                 )
 
@@ -499,7 +507,7 @@ class ResonantDepolarisation:
                 self.kicker_amp_PV.put(0)
                 self.status_callback("Sleeping (injection), kicker => OFF")
 
-                self.interruptible_sleep(10)
+                self._interruptible_sleep(10)
 
                 self.kicker_amp_PV.put(
                     self.set_kicker_amp, use_complete=True
@@ -511,16 +519,13 @@ class ResonantDepolarisation:
 
             if self._abort_requested:
                 self.status_callback("Experiment aborted!")
-                break
-                # break works here because this function is currently the last 
-                # thing before the finally block. If this were to change, I 
-                # would recommend raising an error which is handled instead.
+                raise InterruptedError
 
             time.sleep(0.01)
 
         return None
     # -------------------------------------------------------------------------
-    def calculate_range(
+    def _calculate_range(
         self,
     ) -> None:
         """
@@ -536,7 +541,7 @@ class ResonantDepolarisation:
                 Time (in seconds) spent kicking at each frequency
         estimated_sweep_time: str
                 Estimated time of the experiment sweep, in seconds
-        """
+        """             
         # --- calcs
         self.intrinsic_res_freq: float = (
             self.f_rev * (self.tune + 0) + self.freq_shift
@@ -567,14 +572,14 @@ class ResonantDepolarisation:
         )
         self.sweep_time: float = self.sweep_range * 1e3 / self.sweep_rate  # s
         self.dwell_time: float = self.sweep_step_size / self.sweep_rate  # s
-        if self.set_sweep_direction == SweepDirection.BACKWARD:
-            # sweep start (higest frequency for backward scan), kHz
-            self.set_sweep_freq: float = self.sweep_limits[-1] 
-            self.sweep_end: float = self.sweep_limits[0]
-        elif self.set_sweep_direction == SweepDirection.FORWARD:
+        if self.set_sweep_direction == SweepDirection.FORWARD:
             # sweep start (lowest frequency for forward scan), kHz
             self.set_sweep_freq: float = self.sweep_limits[0]  
             self.sweep_end: float = self.sweep_limits[-1]
+        elif self.set_sweep_direction == SweepDirection.BACKWARD:
+            # sweep start (higest frequency for backward scan), kHz
+            self.set_sweep_freq: float = self.sweep_limits[-1] 
+            self.sweep_end: float = self.sweep_limits[0]
         else:
             raise ValueError(
                 "set_sweep_direction should be one of SweepDirection.FOWARD, "
@@ -590,7 +595,7 @@ class ResonantDepolarisation:
 
         return None
     # -------------------------------------------------------------------------
-    def load_PVs(
+    def _load_PVs(
         self,
     ) -> None:
         """
@@ -610,7 +615,7 @@ class ResonantDepolarisation:
         Code blocks such as waiting for `.put()` to complete with the 
         `put_complete` flag will wait *forever* if the PV is not connected.
         I recommend use of the `.connected` PV attribute to protect such calls.
-        """
+        """         
         # --- BLMs
         self.blm = BLMs()
         self.blm.get_loss_PVs()
@@ -633,22 +638,22 @@ class ResonantDepolarisation:
             self.mx3_bpms.connect()
 
         # --- drive
-        self.sweep_freq_act_PV = epics.pv.get_pv(
+        self.sweep_freq_act_PV: epics.pv.PV = epics.pv.get_pv(
             f"IGPF:{self.direction}:DRIVE:FREQ_ACT", connect=True, timeout=0.5
         )
-        self.sweep_freq_PV = epics.pv.get_pv(
+        self.sweep_freq_PV: epics.pv.PV = epics.pv.get_pv(
             f"IGPF:{self.direction}:DRIVE:FREQ", connect=True, timeout=0.5
         )
-        self.sweep_span_PV = epics.pv.get_pv(
+        self.sweep_span_PV: epics.pv.PV = epics.pv.get_pv(
             f"IGPF:{self.direction}:DRIVE:SPAN", connect=True, timeout=0.5
         )
-        self.sweep_period_PV = epics.pv.get_pv(
+        self.sweep_period_PV: epics.pv.PV = epics.pv.get_pv(
             f"IGPF:{self.direction}:DRIVE:PERIOD", connect=True, timeout=0.5
         )
-        self.kicker_amp_PV = epics.pv.get_pv(
+        self.kicker_amp_PV: epics.pv.PV = epics.pv.get_pv(
             f"IGPF:{self.direction}:DRIVE:AMPL", connect=True, timeout=0.5
         )
-        self.pattern_PV = epics.pv.get_pv(
+        self.pattern_PV: epics.pv.PV = epics.pv.get_pv(
             f"IGPF:{self.direction}:DRIVE:PATTERN", connect=True, timeout=0.5
         )
         BbB_PVs: list[epics.pv.PV] = [
@@ -665,123 +670,160 @@ class ResonantDepolarisation:
             )
 
         # --- current
-        self.dcct = epics.pv.get_pv(
+        self.dcct: epics.pv.PV = epics.pv.get_pv(
             "SR11BCM01:CURRENT_MONITOR", connect=True, timeout=0.5
         )
 
         # --- injection trigger
-        self.injection_trigger = epics.pv.get_pv(
+        self.injection_trigger: epics.pv.PV = epics.pv.get_pv(
             "TS01EVG01:INJECTION_MODE_STATUS", connect=True, timeout=0.5
         )
         if not self.injection_trigger.connected:
             raise ConnectionRefusedError(
-                "Injection trigger PV wont connect. This is required to ignore beam loss spikes on injection."
+                "Injection trigger PV wont connect. "
+                + "This is required to ignore beam loss spikes on injection."
             )
+
+        # --- Wigglers
+        bioSAXS_field_monitor_PV: epics.pv.PV = epics.pv.get_pv(
+                pvname="SR02SCU01:FIELD_MONITOR",
+                connect=True
+        )
+        IMBL_field_monitor_PV: epics.pv.PV = epics.pv.get_pv(
+                pvname="SR08SCW01:FIELD_MONITOR",
+                connect=True
+        )
+        ADS_field_monitor_PV: epics.pv.PV = epics.pv.get_pv(
+                pvname="SR10SCW01:FIELD_MONITOR",
+                connect=True
+        )
+        wiggler_PVs: dict[str, epics.pv.PV] = {
+                "bioSAXS": bioSAXS_field_monitor_PV,
+                "IMBL": IMBL_field_monitor_PV,
+                "ADS": ADS_field_monitor_PV
+        }
+        self.wiggler_fields: dict[str, float] = {}
+        for wiggler, pv in wiggler_PVs.items():
+            if pv.connected and pv.value is not None:
+                self.wiggler_fields[wiggler] = pv.value
 
         # --- SR/LCW/RF temperatures
         # initialise PV dicts
-        self.RF601_LCW_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.RF602_LCW_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.RF701_LCW_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.RF702_LCW_temperature_PVs: dict[str, epics.pv.PV] = {}
+        RF601_LCW_temperature_PVs: dict[str, epics.pv.PV] = {}
+        RF602_LCW_temperature_PVs: dict[str, epics.pv.PV] = {}
+        RF701_LCW_temperature_PVs: dict[str, epics.pv.PV] = {}
+        RF702_LCW_temperature_PVs: dict[str, epics.pv.PV] = {}
 
-        self.RF601_body_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.RF602_body_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.RF701_body_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.RF702_body_temperature_PVs: dict[str, epics.pv.PV] = {}
+        RF601_body_temperature_PVs: dict[str, epics.pv.PV] = {}
+        RF602_body_temperature_PVs: dict[str, epics.pv.PV] = {}
+        RF701_body_temperature_PVs: dict[str, epics.pv.PV] = {}
+        RF702_body_temperature_PVs: dict[str, epics.pv.PV] = {}
 
-        self.magnet_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.tunnel_air_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.beam_pipe_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.slab_temperature_PVs: dict[str, epics.pv.PV] = {}
-        self.SUBH_temperature_PVs: dict[str, epics.pv.PV] = {}
+        magnet_temperature_PVs: dict[str, epics.pv.PV] = {}
+        tunnel_air_temperature_PVs: dict[str, epics.pv.PV] = {}
+        beam_pipe_temperature_PVs: dict[str, epics.pv.PV] = {}
+        slab_temperature_PVs: dict[str, epics.pv.PV] = {}
+        SUBH_temperature_PVs: dict[str, epics.pv.PV] = {}
 
-        self.temperature_PV_dicts = [
-            self.RF601_LCW_temperature_PVs,
-            self.RF602_LCW_temperature_PVs,
-            self.RF701_LCW_temperature_PVs,
-            self.RF702_LCW_temperature_PVs,
-            self.RF601_body_temperature_PVs,
-            self.RF602_body_temperature_PVs,
-            self.RF701_body_temperature_PVs,
-            self.RF702_body_temperature_PVs,
-            self.magnet_temperature_PVs,
-            self.tunnel_air_temperature_PVs,
-            self.beam_pipe_temperature_PVs,
-            self.slab_temperature_PVs,
-            self.SUBH_temperature_PVs,
+        self.temperature_PV_dicts: list[dict[str, epics.pv.PV]] = [
+            RF601_LCW_temperature_PVs,
+            RF602_LCW_temperature_PVs,
+            RF701_LCW_temperature_PVs,
+            RF702_LCW_temperature_PVs,
+            RF601_body_temperature_PVs,
+            RF602_body_temperature_PVs,
+            RF701_body_temperature_PVs,
+            RF702_body_temperature_PVs,
+            magnet_temperature_PVs,
+            tunnel_air_temperature_PVs,
+            beam_pipe_temperature_PVs,
+            slab_temperature_PVs,
+            SUBH_temperature_PVs,
         ]
 
         # grab PVs
-        cavities = ["601", "602", "701", "702"]
+        sectors: list[int] = [6, 7]
+        cavities: list[int]= [1, 2]
         # RF LCW
-        RF_LCW_PV_dicts = [
-            self.RF601_LCW_temperature_PVs,
-            self.RF602_LCW_temperature_PVs,
-            self.RF701_LCW_temperature_PVs,
-            self.RF702_LCW_temperature_PVs,
+        RF_LCW_PV_dicts: list[dict[str, epics.pv.PV]] = [
+            RF601_LCW_temperature_PVs,
+            RF602_LCW_temperature_PVs,
+            RF701_LCW_temperature_PVs,
+            RF702_LCW_temperature_PVs,
         ]
-        for cavity, PV_dict in zip(cavities, RF_LCW_PV_dicts):
-            prefix = f"SR0{cavity[0]}RF0{cavity[-1]}"
-            PV_dict[f"{prefix}RLD01:INLET_WATER_TEMP_MONITOR"] = (
+        for (sector, cavity), PV_dict in zip(
+                itertools.product(sectors, cavities), RF_LCW_PV_dicts
+            ):
+            prefix = f"SR{sector:02d}RF{cavity:02d}"
+            pvname = f"{prefix}RLD01:INLET_WATER_TEMP_MONITOR"
+            PV_dict[pvname] = (
                 epics.pv.get_pv(
-                    f"{prefix}RLD01:INLET_WATER_TEMP_MONITOR",
+                    pvname,
                     connect=True,
                     timeout=0.5,
                 )
             )
-            PV_dict[f"{prefix}CIR01:INLET_WATER_TEMP_MONITOR"] = (
+            pvname: str = f"{prefix}CIR01:INLET_WATER_TEMP_MONITOR"
+            PV_dict[pvname] = (
                 epics.pv.get_pv(
-                    f"{prefix}CIR01:INLET_WATER_TEMP_MONITOR",
+                    pvname,
                     connect=True,
                     timeout=0.5,
                 )
             )
-            PV_dict[f"{prefix}KLY01:BODY_INLET_TEMP_MONITOR"] = (
+            pvname: str = f"{prefix}KLY01:BODY_INLET_TEMP_MONITOR"
+            PV_dict[pvname] = (
                 epics.pv.get_pv(
-                    f"{prefix}KLY01:BODY_INLET_TEMP_MONITOR",
+                    pvname,
                     connect=True,
                     timeout=0.5,
                 )
             )
-            PV_dict[f"{prefix}CAV01:INLET_TEMPERATURE_MONITOR"] = (
+            pvname: str = f"{prefix}CAV01:INLET_TEMPERATURE_MONITOR"
+            PV_dict[pvname] = (
                 epics.pv.get_pv(
-                    f"{prefix}CAV01:INLET_TEMPERATURE_MONITOR",
+                    pvname,
                     connect=True,
                     timeout=0.5,
                 )
             )
 
         # RF body
-        RF_bodytemp_PV_dicts = [
-            self.RF601_body_temperature_PVs,
-            self.RF602_body_temperature_PVs,
-            self.RF701_body_temperature_PVs,
-            self.RF702_body_temperature_PVs,
+        RF_bodytemp_PV_dicts: list[dict[str, epics.pv.PV]] = [
+            RF601_body_temperature_PVs,
+            RF602_body_temperature_PVs,
+            RF701_body_temperature_PVs,
+            RF702_body_temperature_PVs,
         ]
-        for cavity, PV_dict in zip(cavities, RF_bodytemp_PV_dicts):
-            prefix = f"SR0{cavity[0]}RF0{cavity[-1]}TES"
-            for i in range(1, 14 + 1, 1):
-                PV_dict[f"{prefix}{i:02d}:TEMPERATURE_MONITOR"] = (
+        for (sector, cavity), PV_dict in zip(
+                itertools.product(sectors, cavities), RF_bodytemp_PV_dicts
+            ):
+            prefix = f"SR{sector:02d}RF{cavity:02d}TES"
+            for monitor in range(1, 14 + 1, 1):
+                pvname: str = f"{prefix}{monitor:02d}:TEMPERATURE_MONITOR"
+                PV_dict[pvname] = (
                     epics.pv.get_pv(
-                        f"{prefix}{i:02d}:TEMPERATURE_MONITOR",
+                        pvname,
                         connect=True,
                         timeout=0.5,
                     )
                 )
-            prefix = f"SR0{cavity[0]}RF0{cavity[-1]}CIR01"
-            PV_dict[f"{prefix}:RF_TEMP_MONITOR"] = epics.pv.get_pv(
-                f"{prefix}:RF_TEMP_MONITOR", connect=True, timeout=0.5
+            prefix = f"SR{sector:02d}RF{cavity:02d}CIR01"
+            pvname: str = f"{prefix}:RF_TEMP_MONITOR"
+            PV_dict[pvname] = epics.pv.get_pv(
+                pvname, connect=True, timeout=0.5
             )
-            PV_dict[f"{prefix}:REGULATOR_TEMP_MONITOR"] = epics.pv.get_pv(
-                f"{prefix}:REGULATOR_TEMP_MONITOR", connect=True, timeout=0.5
+            pvname: str = f"{prefix}:REGULATOR_TEMP_MONITOR"
+            PV_dict[pvname] = epics.pv.get_pv(
+                pvname, connect=True, timeout=0.5
             )
-            PV_dict[f"{prefix}:SHUNT_TEMP_MONITOR"] = epics.pv.get_pv(
-                f"{prefix}:SHUNT_TEMP_MONITOR", connect=True, timeout=0.5
+            pvname: str = f"{prefix}:SHUNT_TEMP_MONITOR"
+            PV_dict[pvname] = epics.pv.get_pv(
+                pvname, connect=True, timeout=0.5
             )
 
         # magnets
-        magnet_temperature_PV_names = [
+        magnet_temperature_PV_names: list[str] = [
             "SR01TES02:TEMPERATURE_MONITOR",
             "SR01TES05:TEMPERATURE_MONITOR",
             "SR01TES06:TEMPERATURE_MONITOR",
@@ -791,79 +833,79 @@ class ResonantDepolarisation:
             "SR12TES01:TEMPERATURE_MONITOR",
         ]
         for PV_name in magnet_temperature_PV_names:
-            self.magnet_temperature_PVs[PV_name] = epics.pv.get_pv(
+            magnet_temperature_PVs[PV_name] = epics.pv.get_pv(
                 PV_name, connect=True, timeout=0.5
             )
 
         # tunnel air temp
-        tunnel_air_temperature_PV_names = [
+        tunnel_air_temperature_PV_names: list[str] = [
             "SR01TES03:TEMPERATURE_MONITOR",
             "SR06TES01:TEMPERATURE_MONITOR",
             "SR07TES01:TEMPERATURE_MONITOR",
         ]
         for PV_name in tunnel_air_temperature_PV_names:
-            self.tunnel_air_temperature_PVs[PV_name] = epics.pv.get_pv(
+            tunnel_air_temperature_PVs[PV_name] = epics.pv.get_pv(
                 PV_name, connect=True, timeout=0.5
             )
 
         # beam pipe
-        beam_pipe_temperature_PV_names = [
+        beam_pipe_temperature_PV_names: list[str] = [
             "SR08TES11:TEMPERATURE_MONITOR",
             "SR08TES12:TEMPERATURE_MONITOR",
         ]
         for PV_name in beam_pipe_temperature_PV_names:
-            self.beam_pipe_temperature_PVs[PV_name] = epics.pv.get_pv(
+            beam_pipe_temperature_PVs[PV_name] = epics.pv.get_pv(
                 PV_name, connect=True, timeout=0.5
             )
 
         # slab
-        self.slab_temperature_PVs["SR04TES12:TEMPERATURE_MONITOR"] = (
+        slab_temperature_PVs["SR04TES12:TEMPERATURE_MONITOR"] = (
             epics.pv.get_pv(
                 "SR04TES12:TEMPERATURE_MONITOR", connect=True, timeout=0.5
             )
         )
 
         # SUBH
-        for i in range(1, 5 + 1, 1):
-            PV_name = f"TEMP-SUBH{i:02d}-IN:TEMP_MONITOR"
-            self.SUBH_temperature_PVs[PV_name] = epics.pv.get_pv(
+        for index in range(1, 5+1, 1):
+            PV_name = f"TEMP-SUBH{index:02d}-IN:TEMP_MONITOR"
+            SUBH_temperature_PVs[PV_name] = epics.pv.get_pv(
                 PV_name, connect=True, timeout=0.5
             )
 
         # initialise temperature dicts
-        self.RF601_LCW_temperatures: dict[str, float] = {}
-        self.RF602_LCW_temperatures: dict[str, float] = {}
-        self.RF701_LCW_temperatures: dict[str, float] = {}
-        self.RF702_LCW_temperatures: dict[str, float] = {}
+        RF601_LCW_temperatures: dict[str, float] = {}
+        RF602_LCW_temperatures: dict[str, float] = {}
+        RF701_LCW_temperatures: dict[str, float] = {}
+        RF702_LCW_temperatures: dict[str, float] = {}
 
-        self.RF601_body_temperatures: dict[str, float] = {}
-        self.RF602_body_temperatures: dict[str, float] = {}
-        self.RF701_body_temperatures: dict[str, float] = {}
-        self.RF702_body_temperatures: dict[str, float] = {}
+        RF601_body_temperatures: dict[str, float] = {}
+        RF602_body_temperatures: dict[str, float] = {}
+        RF701_body_temperatures: dict[str, float] = {}
+        RF702_body_temperatures: dict[str, float] = {}
 
-        self.magnet_temperatures: dict[str, float] = {}
-        self.tunnel_air_temperatures: dict[str, float] = {}
-        self.beam_pipe_temperatures: dict[str, float] = {}
-        self.slab_temperatures: dict[str, float] = {}
-        self.SUBH_temperatures: dict[str, float] = {}
+        magnet_temperatures: dict[str, float] = {}
+        tunnel_air_temperatures: dict[str, float] = {}
+        beam_pipe_temperatures: dict[str, float] = {}
+        slab_temperatures: dict[str, float] = {}
+        SUBH_temperatures: dict[str, float] = {}
 
-        self.temperature_value_dicts = [
-            self.RF601_LCW_temperatures,
-            self.RF602_LCW_temperatures,
-            self.RF701_LCW_temperatures,
-            self.RF702_LCW_temperatures,
-            self.RF601_body_temperatures,
-            self.RF602_body_temperatures,
-            self.RF701_body_temperatures,
-            self.RF702_body_temperatures,
-            self.magnet_temperatures,
-            self.tunnel_air_temperatures,
-            self.beam_pipe_temperatures,
-            self.slab_temperatures,
-            self.SUBH_temperatures,
+        self.temperature_value_dicts: list[dict[str, float]] = [
+            RF601_LCW_temperatures,
+            RF602_LCW_temperatures,
+            RF701_LCW_temperatures,
+            RF702_LCW_temperatures,
+            RF601_body_temperatures,
+            RF602_body_temperatures,
+            RF701_body_temperatures,
+            RF702_body_temperatures,
+            magnet_temperatures,
+            tunnel_air_temperatures,
+            beam_pipe_temperatures,
+            slab_temperatures,
+            SUBH_temperatures,
         ]
 
-        self.temperature_save_file_names = [
+        self.temperature_save_file_names: list[str] = [
             "RF601_LCW_temperatures.json",
             "RF602_LCW_temperatures.json",
             "RF701_LCW_temperatures.json",
@@ -891,14 +933,14 @@ class ResonantDepolarisation:
 
         return None
     # -------------------------------------------------------------------------
-    def config_logger(self,) -> None:
+    def _config_logger(self,) -> None:
         logger_format = "%(asctime)s - %(levelname)s - %(message)s"
         self.logger_formatter = logging.Formatter(logger_format)
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
         return None
     # -------------------------------------------------------------------------
-    def config_data_path(
+    def _config_data_path(
         self,
     ) -> None:
         # --- init save path (format: Data\YYYY-mm-dd\HHMM+'h'\) 
@@ -944,7 +986,7 @@ class ResonantDepolarisation:
 
         return None
     # -------------------------------------------------------------------------
-    def config_save_objects(
+    def _config_save_objects(
         self,
     ) -> None:
         """
@@ -953,8 +995,8 @@ class ResonantDepolarisation:
         self.freqs: list[float] = []
         self.set_freqs: list[float] = []
         self.current: list[Union[float, None]] = []
-        self.timestamps_datetime: list[datetime.datetime] = []
-        self.timestamps_str: list[str] = []
+        self.timestamps: list[datetime.datetime] = []
+        self.formatted_timestamps: list[str] = []
         self.injections: list[datetime.datetime] = []
         self.injections_str: list[str] = []
         self.beam_loss_window_1: dict[str, list[float]] = {}
@@ -987,8 +1029,9 @@ class ResonantDepolarisation:
                 "%Y-%m-%d %H:%M:%S"
             ),
         }
+        self.metadata.update(self.wiggler_fields)
     # -------------------------------------------------------------------------
-    def log_data(
+    def _log_data(
         self,
     ) -> None:
         """
@@ -1004,12 +1047,12 @@ class ResonantDepolarisation:
         - Current
         - timestamps
         - BPM position and intensity (with `resdepGUI` checkbox)
-        """
+        """                     
         try:
-            timestamp = datetime.datetime.now()
-            timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
-            self.timestamps_datetime.append(timestamp)
-            self.timestamps_str.append(timestamp_str)
+            timestamp: datetime.datetime = datetime.datetime.now()
+            formatted_timestamp: str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            self.timestamps.append(timestamp)
+            self.formatted_timestamps.append(formatted_timestamp)
             self.set_freqs.append(self.set_sweep_freq)
             freq: Union[float, None] = self.sweep_freq_act_PV.get(timeout=0.5)
             if freq is not None:
@@ -1028,18 +1071,18 @@ class ResonantDepolarisation:
 
             # BLMs
             for key in self.blm.loss_PV:
-                counter_loss_1 = self.blm.adc_counter_loss_1_PV[key].get(timeout=0.5)
+                counter_loss_1: Union[float, None] = (
+                        self.blm.adc_counter_loss_1_PV[key].get(timeout=0.5)
+                )
                 if counter_loss_1 is not None:
-                    self.beam_loss_window_1[key].append(
-                        counter_loss_1
-                    )
+                    self.beam_loss_window_1[key].append(counter_loss_1)
                 else:
                     self.beam_loss_window_1[key].append(np.nan)
-                counter_loss_2 = self.blm.adc_counter_loss_2_PV[key].get(timeout=0.5)
+                counter_loss_2: Union[float, None] = (
+                        self.blm.adc_counter_loss_2_PV[key].get(timeout=0.5)
+                )
                 if counter_loss_2 is not None:
-                    self.beam_loss_window_2[key].append(
-                        counter_loss_2
-                    )
+                    self.beam_loss_window_2[key].append(counter_loss_2)
                 else:
                     self.beam_loss_window_2[key].append(np.nan)
 
@@ -1056,7 +1099,7 @@ class ResonantDepolarisation:
 
         return None
     # -------------------------------------------------------------------------
-    def calcf_revfromMasterRF(
+    def _calc_revolution_frequency_from_master_RF(
         self,
     ) -> None:
         """
@@ -1068,13 +1111,11 @@ class ResonantDepolarisation:
         f_rev: float
             Revolution frequency
         """
-        masterRF_PV = epics.pv.get_pv(
+        masterRF_PV: epics.pv.PV = epics.pv.get_pv(
             "SR00MOS01:FREQUENCY_MONITOR", connect=True, timeout=0.5
         )
-        if masterRF_PV.connected:
-            masterRF: Union[float, None] = masterRF_PV.get(timeout=0.5)  # Hz
-            if masterRF is not None:
-                self.f_rev: float = 1e-3 * masterRF / 360  # kHz
+        if masterRF_PV.connected and masterRF_PV.value is not None:
+            self.f_rev: float = 1e-3 * masterRF_PV.value / 360  # kHz
 
         return None
     # ----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1090,13 +1131,13 @@ class ResonantDepolarisation:
 
         Returns
         -------
-        calculated_adc_counter_windows: list[int]
+        adc_counter_windows: list[int]
             list containing counters 1 & 2 window and offset settings for 
             the given sector.
             Values are a list of `[offset_1, window_1, offset_2, window_2]`
 
-        depolarised_bunches: str
-            list containing the start:stop range of bunches to be depolarised 
+        _depolarised_bunches: str
+            list containing the start:stop range of bunches to be _depolarised 
             using the BbB.
             This is basically a conversion from the ADC cycles 
             (window length and pos) to bunch number.
@@ -1110,18 +1151,25 @@ class ResonantDepolarisation:
         -----
         This only works for one sector, since there is no way to make the ADC 
         windows wrap around `T0`. Thus, the 'half' of the beam that the ADC 
-        windows capture informs the bunches that should be depolarised by the 
+        windows capture informs the bunches that should be _depolarised by the 
         BbB, and said half is unlikely to line up with the bunch numbers 
         (*i.e.* unlikely to be bunches 1--180).
 
         Regardless of the shape / phase of the fill pattern seen by the BLM:
 
-            +---------------+   +---------------+   +---------------+   +---------------+
-            | +-----------+ |   |--------+  +---|   |-+  +----------|   |------+  +-----|
-            | |           | |   |        |  |   |   | |  |          |   |      |  |     |
-            | |           | |   |        |  |   |   | |  |          |   |      |  |     |
-            |-+           +-|   |        +--+   |	| +--+          |   |      +--+     |
-            +---------------+   +---------------+   +---------------+   +---------------+
+            +---------------+   +---------------+
+            | +-----------+ |   |---------+  +--|
+            | |           | |   |         |  |  |
+            | |           | |   |         |  |  |
+            |-+           +-|   |         +--+  |
+            +---------------+   +---------------+
+
+            +---------------+   +---------------+
+            |-+  +----------|   |------+  +-----|
+            | |  |          |   |      |  |     |
+            | |  |          |   |      |  |     |
+            | +--+          |   |      +--+     |
+            +---------------+   +---------------+
 
         we can simply integrate the fill pattern from the left until we reach 
         exactly half of the area under the curve to split the beam into two 
@@ -1129,11 +1177,11 @@ class ResonantDepolarisation:
         from the point which divides the beam into the charge eqivalent halves.
 
         From there, we can calculate the time / phase difference between the 
-        BLM and BbB system and calculate the bunches to be depolarised. 
+        BLM and BbB system and calculate the bunches to be _depolarised. 
         Alignment is done by finding the minima of the fill pattern seen by 
         each system and shifting the BbB by the difference between them.
 
-        """
+        """                                                                 
         self.logger.info(
             "Status: Time aligning BLM ADC windows and BbB system..."
         )   
@@ -1144,7 +1192,7 @@ class ResonantDepolarisation:
         if sector not in self.blm.sectors_connected:
             alternative_sectors: list[int] = list(set(
                 GOOD_ALIGNMENT_SECTORS
-            ).intersection(self.blm.sectors_OOS))
+            ).intersection(self.blm.sectors_connected))
             if len(alternative_sectors) == 0:
                 raise ConnectionError(
                     "All possible BLMs with good alignment properties to the " 
@@ -1158,18 +1206,17 @@ class ResonantDepolarisation:
         SUM_DEC: int = 86
         SUMDEC_PERIODS: int = 50
         BUCKETS_PER_CYCLE: float = 360 / SUM_DEC
-        replicated_fill_pattern: npt.NDArray[np.floating]
 
         # --- BbB waveform PVs --- #
-        SRAM_x_waveform_PV = epics.pv.get_pv(
+        SRAM_x_waveform_PV: epics.pv.PV = epics.pv.get_pv(
             "IGPF:X:SRAM:MEAN", connect=True, timeout=1
         )
-        SRAM_y_waveform_PV = epics.pv.get_pv(
+        SRAM_y_waveform_PV: epics.pv.PV = epics.pv.get_pv(
             "IGPF:Y:SRAM:MEAN", connect=True, timeout=1
         )
-        if not all(
-            [pv.connected for pv in [SRAM_x_waveform_PV, SRAM_y_waveform_PV]]
-        ):
+        if not all([
+            pv.connected for pv in [SRAM_x_waveform_PV, SRAM_y_waveform_PV]
+        ]):
             raise ConnectionRefusedError(
                 "SRAM waveform PVs in BbB disconnected."
             )
@@ -1205,51 +1252,51 @@ class ResonantDepolarisation:
                     "Waiting for injection to update integrated buffer..."
                 )
             while not self._injecting:
-                self.interruptible_sleep(1)
+                self._interruptible_sleep(1)
             self.status_callback(
                     "Time aligning BLM ADC windows and BbB system..."
                 )
 
-        integrated_buffer_loss = (
+        integrated_buffer_loss: Union[npt.NDArray, None] = (
             self.blm.integrated_buffer_loss_PV[f"{sector}B"].get(timeout=0.5)
         )
-        if integrated_buffer_loss is not None:
-            replicated_fill_pattern = np.array(integrated_buffer_loss)
-        else:
-            raise TypeError("integrated buffer loss returned None")
+        if integrated_buffer_loss is None:
+            raise TypeError(
+                    "Integrated buffer loss returned None"
+        )
         time.sleep(0.5)
         # integrated buffer is updside down, need to normalise
-        replicated_fill_pattern = replicated_fill_pattern / np.max(
-            replicated_fill_pattern
+        integrated_buffer_loss = (
+                integrated_buffer_loss / integrated_buffer_loss.max()        
         )
         # and flip
-        replicated_fill_pattern = -1 * replicated_fill_pattern + 1
+        integrated_buffer_loss = integrated_buffer_loss * -1 + 1
         # and shift by trigger 2 (T2) delay
-        T2_delay = self.blm.init_t2_trigger_delays[f"{sector}"]
+        T2_delay: Union[int, float, None] = (
+                self.blm.init_t2_trigger_delays[f"{sector}"]
+        )
         if T2_delay is not None:
             T2_delay = int(T2_delay) % SUM_DEC
         else:
             raise TypeError(
                 f"T2 delay for BLM in sector {sector} returned None"
             )
-        replicated_fill_pattern = np.concatenate(
+        integrated_buffer_loss = np.concatenate(
             (
-                replicated_fill_pattern[T2_delay:],
-                replicated_fill_pattern[:T2_delay],
+                integrated_buffer_loss[T2_delay:],
+                integrated_buffer_loss[:T2_delay],
             )
         )
 
         # separate the fill pattern into two charge equivalent halves
-        integrated_fill_pattern = np.sum(replicated_fill_pattern)
-        cumsum_fill_pattern = np.cumsum(replicated_fill_pattern)
-        dividing_line = (
-            int(np.flatnonzero(
-                    cumsum_fill_pattern < integrated_fill_pattern / 2
-                )[-1]
-            ) + 1
+        integrated_fill_pattern: np.floating = np.sum(integrated_buffer_loss)
+        cumsum_fill_pattern: npt.NDArray = np.cumsum(integrated_buffer_loss)
+        dividing_line: int = int(np.flatnonzero(
+            cumsum_fill_pattern < integrated_fill_pattern/2
+            ).max() + 1
         )
         # format: [offset_1, window_1, offset_2, window_2]
-        calculated_adc_counter_windows: list[int] = [
+        adc_counter_windows: list[int] = [
             0,
             dividing_line,
             dividing_line,
@@ -1257,23 +1304,23 @@ class ResonantDepolarisation:
         ]
         bucket_offset_1, bucket_window_1, bucket_offset_2, bucket_window_2 = [
             BUCKETS_PER_CYCLE * adc_cycle
-            for adc_cycle in calculated_adc_counter_windows
+            for adc_cycle in adc_counter_windows
         ]
 
         # Align the BbB and BLM by finding the middle of the empty buckets in 
         # both fill patterns.
-        blm_middle_empty_bucket = self.find_middle_of_empty_buckets(
-            fill_pattern=replicated_fill_pattern
+        blm_middle_empty_bucket: int = self._find_middle_of_empty_buckets(
+            fill_pattern=integrated_buffer_loss
         )
-        SRAM_x_middle_empty_bucket = self.find_middle_of_empty_buckets(
+        SRAM_x_middle_empty_bucket: int = self._find_middle_of_empty_buckets(
             fill_pattern=SRAM_x_waveform
         )
-        SRAM_y_middle_empty_bucket = self.find_middle_of_empty_buckets(
+        SRAM_y_middle_empty_bucket: int = self._find_middle_of_empty_buckets(
             fill_pattern=SRAM_y_waveform
         )
         # FPM X and Y can be slighly different shapes. I take the average of 
         # the two.
-        SRAM_middle_empty_bucket = (
+        SRAM_middle_empty_bucket: int = (
             SRAM_x_middle_empty_bucket + SRAM_y_middle_empty_bucket
         )//2
 
@@ -1282,14 +1329,14 @@ class ResonantDepolarisation:
         )
         self.logger.debug(f"BLM middle empty bucket={blm_middle_empty_bucket}")
 
-        # Shift the calculated depolarised bunches by the time offset between
+        # Shift the calculated _depolarised bunches by the time offset between
         # the BLM and BbB system (given by the difference in the empty buckets)
-        bucket_offset_1 = int(
+        bucket_offset_1: int = int(
             bucket_offset_1
             + SRAM_middle_empty_bucket
             - (blm_middle_empty_bucket * BUCKETS_PER_CYCLE)
         )
-        bucket_offset_2 = int(
+        bucket_offset_2: int = int(
             bucket_offset_2
             + SRAM_middle_empty_bucket
             - (blm_middle_empty_bucket * BUCKETS_PER_CYCLE)
@@ -1302,37 +1349,37 @@ class ResonantDepolarisation:
             bucket_offset_2 = (bucket_offset_2 - 1) % 360 + 1
 
         # The start of one window is the end of the other.
-        depolarised_bunch_start: int = bucket_offset_1
-        depolarised_bunch_end: int = bucket_offset_2 - 1
-        depolarised_bunches: str = (
-            f"{depolarised_bunch_start}:{depolarised_bunch_end}"
+        _depolarised_bunch_start: int = bucket_offset_1
+        _depolarised_bunch_end: int = bucket_offset_2 - 1
+        _depolarised_bunches: str = (
+            f"{_depolarised_bunch_start}:{_depolarised_bunch_end}"
         )
 
         # update experiment settings
-        self.set_drive_pattern = depolarised_bunches
+        self.set_drive_pattern = _depolarised_bunches
         [
             self.set_adc_counter_offset_1,
             self.set_adc_counter_window_1,
             self.set_adc_counter_offset_2,
             self.set_adc_counter_window_2,
-        ] = calculated_adc_counter_windows
+        ] = adc_counter_windows
 
         # update GUI
         if self.ADC_windows_callback is not None:
             self.ADC_windows_callback(
-                calculated_adc_counter_windows, depolarised_bunches
+                adc_counter_windows, _depolarised_bunches
             )
 
         self.logger.debug(
             "Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]"
         )
-        self.logger.debug(calculated_adc_counter_windows)
-        self.logger.debug("Corresponding depolarised bunches for BbB:")
-        self.logger.debug(depolarised_bunches)
+        self.logger.debug(adc_counter_windows)
+        self.logger.debug("Corresponding _depolarised bunches for BbB:")
+        self.logger.debug(_depolarised_bunches)
 
         return None
     # -------------------------------------------------------------------------
-    def find_middle_of_empty_buckets(
+    def _find_middle_of_empty_buckets(
         self, fill_pattern: npt.NDArray[np.floating]
     ) -> int:
         """
@@ -1350,26 +1397,31 @@ class ResonantDepolarisation:
         middle_of_empty_buckets: int
             The argument of the middle of the empty buckets with respect to 
             the input shape of `fill_pattern`.
-        """
+        """             
 
         boundary: int = len(fill_pattern)
-        threshold = 0.6 * np.max(fill_pattern)
-        args_under_threshold = np.flatnonzero(fill_pattern < threshold)
+        threshold: float = 0.6 * max(fill_pattern)
+        args_under_threshold: npt.NDArray = np.flatnonzero(
+                fill_pattern < threshold
+        )
         if len(args_under_threshold) == 0:
             raise ArithmeticError(
                 "Can't find minimum (empty buckets) in fill pattern "
                 + "(args_under_threshold is empty)."
             )
         # Account for empty buckets wraping around T0
-        if any(args_under_threshold < 5) and any(
-            args_under_threshold > boundary - 5
+        BOUNDARY_BUCKETS = 5
+        if any(
+                args_under_threshold < BOUNDARY_BUCKETS
+            ) and any(
+                args_under_threshold > (boundary - BOUNDARY_BUCKETS)
         ):
             difference_in_args = (
                 args_under_threshold[1:] - args_under_threshold[:-1]
             )
             jump_in_args = np.argmax(difference_in_args)
             # undo wrap around T0
-            args_under_threshold[: jump_in_args + 1] += boundary
+            args_under_threshold[:(jump_in_args+1)] += boundary
 
         middle_empty_bucket_arg = int(np.mean(args_under_threshold)) % boundary
 
@@ -1423,7 +1475,7 @@ class ResonantDepolarisation:
                     f.write(str(value) + "\n")
 
             with open(self.data_path / "timestamps.txt", "w") as f:
-                for value in self.timestamps_str:
+                for value in self.formatted_timestamps:
                     f.write(value + "\n")
 
             with open(self.data_path / "adc_counter_loss_1.json", "w") as f:
@@ -1469,7 +1521,7 @@ class ResonantDepolarisation:
         self,
     ) -> None:
         """
-        Plots loss ratio between polarised and depolarised bunches.
+        Plots loss ratio between polarised and _depolarised bunches.
         Fits error function to sectors with compatible timing with BbB / FPM.
 
         Warning
@@ -1482,18 +1534,16 @@ class ResonantDepolarisation:
             self.logger.info("Attempting to plot ratio data...")
 
             processed_data = ProcessedData(resdep=self)
-            processed_data.calculate_ratio_loss(sigma=200, bin=True)
+            processed_data.calculate_ratio_loss()
 
             graph = StandaloneGraph()
-            # ty ignore here is because ty is still in beta and cannot resolve 
-            # typing.Self as type <Class> ResonantDepolarisation
-            plotting = PlottingClass(
-                resdep=self, processed_data=processed_data, graph=graph # ty: ignore[invalid-argument-type]
+            plotting = Plotter(
+                resdep=self, processed_data=processed_data, graph=graph 
             ) 
-            fitting = FittingClass(resdep=self, processed_data=processed_data) # ty: ignore[invalid-argument-type]
+            fitter = Fitter(resdep=self, processed_data=processed_data) 
 
             E0_mean, E0_mean_sigfig, fitted_beam_energy_string, error = (
-                fitting.automagic_fit()
+                fitter.automagic_fit()
             )
             self.logger.info(fitted_beam_energy_string)
             plotting.plot_ratio_loss()
@@ -1515,7 +1565,7 @@ class ResonantDepolarisation:
     # *---------- PV callbacks --------* #
     # *--------------------------------* #
     # -------------------------------------------------------------------------
-    def onValueChange(self, pvname=None, value=None, host=None, **kws) -> None:
+    def _on_value_change(self, pvname=None, value=None, host=None, **kws) -> None:
         """
         PV callback that listens for injections and changes `_injecting` state.
         Used to sleep around injections during experimnent loop.
@@ -1525,7 +1575,12 @@ class ResonantDepolarisation:
         # PV.value which is cached.
 
         try:
-            if value == 2:
+            if not isinstance(value, int):
+                raise TypeError(
+                        "Gun trigger mode PV failed to return an int/enum"
+            )
+            mode = InjectionMode(value)
+            if mode == InjectionMode.GUN_INJECTION:
                 inj_time = datetime.datetime.now()
                 inj_time_str = inj_time.strftime("%Y-%m-%d %H:%M:%S")
                 self.injections.append(inj_time)
@@ -1554,7 +1609,7 @@ class ResonantDepolarisation:
     # *----------- Utilities ----------* #
     # *--------------------------------* #
     # -------------------------------------------------------------------------
-    def interruptible_sleep(self, seconds: int) -> None:
+    def _interruptible_sleep(self, seconds: int) -> None:
         """
         Sleeps over long periods of time, waking often to check states 
         (for example: `abort`).
@@ -1595,16 +1650,16 @@ class ProcessedData:
     mask: Union[npt.NDArray[np.bool_], "builtins.ellipsis"]
         Binary mask, used to constrain the fit to a certain frequency range.
         Value assigned in 
-        [`automagic_fit`][resdep._fitting.FittingClass.automagic_fit], and
-        [`calculate_fitting_mask`][resdep._plotting.PlottingClass.calculate_fitting_mask].
+        [`automagic_fit`][resdep._fitting.Fitter.automagic_fit], and
+        [`calculate_fitting_mask`][resdep._plotting.Plotter.calculate_fitting_mask].
 
     y_model: dict[str, npt.NDArray[np.float64]]
         y-axis data generated by the cumulative distribution function fit.
-        See [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions].
+        See [`fit_error_functions`][resdep._fitting.Fitter.fit_error_functions].
 
     fitted_beam_energies: dict[str, float]
         The mean beam energy extracted from the fit to the loss on each sector.
-        See [`fit_error_functions`][resdep._fitting.FittingClass.fit_error_functions].
+        See [`fit_error_functions`][resdep._fitting.Fitter.fit_error_functions].
 
     fitted_beam_energy_stddevs: dict[str, float]
         The standard deviations of the above values.
@@ -1612,7 +1667,7 @@ class ProcessedData:
     E0_mean: Union[float, None]
         Mean beam energy, derived from the average of the fits over all 
         sectors. See 
-        [`calculate_fitted_energy_stats`][resdep._fitting.FittingClass.calculate_fitted_energy_stats].
+        [`calculate_fitted_energy_stats`][resdep._fitting.Fitter.calculate_fitted_energy_stats].
 
     E0_stddev: Union[float, None]
         Two standard deviations of the above value.
@@ -1625,16 +1680,16 @@ class ProcessedData:
     Note
     ----
     This Class is passed by reference when instancing the helper classes
-    [fitting][resdep._fitting.FittingClass] and 
-    [plotting][resdep._plotting.PlottingClass].
+    [fitter][resdep._fitting.Fitter] and 
+    [plotter][resdep._plotting.Plotter].
     This is to pass the data between the different modules without having to 
-    configure each helper function to take in and return *many* args.
+    plotter each helper function to take in and return *many* args.
 
     """                                                         
     resdep: "ResonantDepolarisation"
     # defaults (if data is not passed on initialisation/instancing)
     sectors_to_fit: list[int] = field(
-        default_factory=lambda: [1, 4, 8, 11, 12, 13]
+        default_factory=lambda: [1, 3, 8, 14]
     )
     freqs_array: npt.NDArray[np.floating] = field(default=np.array([]))
     ratio_loss: dict[str, npt.NDArray[np.floating]] = field(
@@ -1652,7 +1707,7 @@ class ProcessedData:
     fitted_beam_energies: dict[str, float] = field(default_factory=dict)
     fitted_beam_energy_stddevs: dict[str, float] = field(default_factory=dict)
     fit_results: str = field(default="")
-    fitted_beam_energy_str: str = field(default="")
+    formatted_beam_energy: str = field(default="")
     _poor_fit: dict[str, bool] = field(default_factory=dict)
     # stats
     E0_mean: Optional[float] = field(default=None)
@@ -1660,7 +1715,11 @@ class ProcessedData:
     E0_mean_sigfig: Optional[float] = field(default=None)
     E0_stddev_sigfig: Optional[float] = field(default=None)
     # -------------------------------------------------------------------------
-    def calculate_ratio_loss(self, sigma: int, bin: bool = False) -> None:
+    def calculate_ratio_loss(
+            self,
+            smoothing_mode: Literal["binning", "gaussian_filter"] = "binning",
+            sigma: Optional[int] = None,
+            ) -> None:
         """
         Calculates the ratio of the beam loss between the two ADC windows on 
         the beam loss monitors.
@@ -1675,20 +1734,33 @@ class ProcessedData:
             Keys of the form `"{sector}{section}"`, e.g. `"4A"`
 
         """         
-        self.freqs_array = np.array(self.resdep.set_freqs)
-        self.beam_loss_window_1 = (
+        window = 1000 # num args of frequency
+        # compensate for settings outside standard operation:
+        # - kicker amp = 50%
+        # - sweep rate = 5 Hz/s
+        try:
+            window = int(
+                    1000 / (self.resdep.sweep_rate/5)
+            )
+        except NameError: # if resdep attributes not loaded
+            pass
+
+        self.freqs_array: npt.NDArray = np.array(self.resdep.set_freqs)
+        self.beam_loss_window_1: dict[str, list[float]] = (
             self.resdep.beam_loss_window_1.copy()
         )  
-        self.beam_loss_window_2 = self.resdep.beam_loss_window_2.copy()
+        self.beam_loss_window_2: dict[str, list[float]] = (
+                self.resdep.beam_loss_window_2.copy()
+        )
 
         # --- account for desynchronisation during aquisition
         # (different data lengths due to readback timing)
         # list all lengths
         lengths: list[int] = []
-        len_data = len(self.freqs_array)
+        len_data: int = len(self.freqs_array)
         lengths.append(len_data)
         for sector in self.sectors_to_fit:
-            key = f"{sector:02d}B"
+            key: str = f"{sector:02d}B"
             try:
                 lengths.append(len(self.beam_loss_window_1[key]))
                 lengths.append(len(self.beam_loss_window_2[key]))
@@ -1700,7 +1772,7 @@ class ProcessedData:
             min_length = min(lengths)
             self.freqs_array = self.freqs_array[0:min_length]
             for sector in self.sectors_to_fit:
-                key = f"{sector:02d}B"
+                key: str = f"{sector:02d}B"
                 try:
                     self.beam_loss_window_1[key] = self.beam_loss_window_1[
                         key
@@ -1714,49 +1786,62 @@ class ProcessedData:
         # Calculate beam loss ratio between the two windows
         for sector in self.sectors_to_fit:
             try:
-                key = f"{sector}B"
-                window_1 = np.array(self.beam_loss_window_1[key])
-                window_2 = np.array(self.beam_loss_window_2[key])
-                # add offset so no ratio is divide by zero
-                # Justification for this is that blowing up the ratio is not 
-                # physical just because there is no offset and we encounter 
-                # divide by zero. 
-                window_1 += 1
-                window_2 += 1
-                self.ratio_loss[key] = window_1/window_2
+                key: str = f"{sector}B"
+                window_1: npt.NDArray = np.array(self.beam_loss_window_1[key])
+                window_2: npt.NDArray = np.array(self.beam_loss_window_2[key])
+                self.ratio_loss[key] = np.divide(
+                        window_1, # numerator
+                        window_2, # divisor
+                        out=np.ones_like(window_1), # fallback value if false
+                        where=window_2 > 0 # true condition
+                )
             except KeyError:  # if a paticular sector to fit is OOS
                 continue 
 
         for sector in self.sectors_to_fit:
             try:
-                key = f"{sector}B"
-                if bin:
-                    if sigma % 2 == 0:  # is even
-                        sigma += 1
-                    padding = ceil(sigma / 2)
-                    number_of_bins = len(self.ratio_loss[key]) - padding
-                    binned_ratio_loss = self.ratio_loss[key].copy()
+                key: str = f"{sector}B"
+                if smoothing_mode == "binning":
+                    if window % 2 == 0:  # is even
+                        window += 1
+                    padding: int = ceil(window / 2)
+                    number_of_bins: int = len(self.ratio_loss[key]) - padding
+                    binned_ratio_loss: npt.NDArray = self.ratio_loss[key].copy()
                     for step in range(number_of_bins):
-                        bin_centre = sigma // 2 + step
-                        start = step
-                        end = start + sigma
+                        bin_centre: int = window//2 + step
+                        start: int = step
+                        end: int = start + window
                         binned_ratio_loss[bin_centre] = np.mean(
                             self.ratio_loss[key][start:end]
                         )
-                    # fill in padding
-                    binned_ratio_loss[:padding] = binned_ratio_loss[sigma // 2]
+                    # pad 
+                    binned_ratio_loss[:padding] = binned_ratio_loss[window // 2]
                     binned_ratio_loss[-padding:] = binned_ratio_loss[
-                        -sigma // 2 - 1
+                        -window//2 - 1
                     ]
                     self.ratio_loss[key] = binned_ratio_loss
-                else:
+                elif smoothing_mode == "gaussian_filter":
+                    if sigma is None:
+                        sigma = 10
                     self.ratio_loss[key] = gaussian_filter1d(
                         self.ratio_loss[key], sigma
+                    )
+                else: 
+                    raise ValueError(
+                            "smoothing mode must be one of:\n"
+                            + "1. binning (default), or "
+                            + "2. gaussian_filter."
                     )
                 # set zero
                 self.ratio_loss[key] += -np.min(self.ratio_loss[key])
                 # normalise
-                self.ratio_loss[key] *= 1 / np.max(self.ratio_loss[key])
+                maximum: np.floating = self.ratio_loss[key].max()
+                self.ratio_loss[key] = np.divide(
+                        self.ratio_loss[key],
+                        maximum,
+                        out=np.zeros_like(self.ratio_loss[key]),
+                        where=maximum != 0
+                )
 
             except KeyError:  # if a paticular sector to fit is OOS
                 continue  
@@ -1783,7 +1868,7 @@ class ProcessedData:
             json.dump(self.y_model, f)
 
         # fit results
-        self.fit_results += f"\n{self.fitted_beam_energy_str}"
+        self.fit_results += f"\n{self.formatted_beam_energy}"
         with open(path / "fit_results.txt", "w") as f:
             f.write(self.fit_results)
         # stats
