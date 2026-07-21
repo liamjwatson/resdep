@@ -55,8 +55,7 @@ from PySide6.QtCore import (
 )
 
 # resdep
-from resdep.experiment import ProcessedData, ResonantDepolarisation
-from resdep._fitting import Fitter
+from resdep.experiment import ResonantDepolarisation
 from resdep._archiver import check_recent_beam_injection
 
 class BeamMode(IntEnum):
@@ -103,44 +102,7 @@ class MainWindow(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        print(
-            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⡀⠄⢀⠀⠀⠀⠀⠀⠀⠐⡀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠲⡀⠀⠀⠠⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠\n",
-            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠠⠑⢈⠐⠀⡀⠄⢀⡀⢀⠀⠁⠈⠀⠐⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠀⠀⠀⠐⠀⢉⠀⠀⠀⠀⠀⠀⠀⠂⠉⡄⠀⠠⠁⠘⠄⡂⢁⠀⡀⠀⠀⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠀⠀⠂⠠⠀⠠⠁⡐⠀⠀⠂⠀⠀⠁⠀⠀⠃⠄⠈⠂⠡⢄⠂⠐⠀⠂⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⠀⠀⠀⠙⢦⡀⠀⠐⠀⠀⠀⠀⠀⠂⠌⠀⠁⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠐⠀⠀⠀⠹⡮⠲⢔⣤⣤⡀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠈⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠳⣶⣿⣿⣿⣿⣷⣦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠀⠀⠀⠢⡀⠀⠀⠀⠀⠠⠀⠀⠀⡀⢄⢦⡝⢿⣿⣿⣿⣿⣿⣿⡿⠷⠖⠀⠐⠀⠀⠒⠤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠀⠀⠀⠀⠀⢤⣀⠀⠀⠀⠀⢄⡻⡟⠘⢼⣼⣿⣿⣿⣿⠿⠛⠀⠀⠀⡀⣀⣤⣿⣤⣤⣀⡀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠷⣶⡦⠔⠮⡟⠾⢶⣿⣿⡿⠛⠉⢀⠀⣀⣤⣲⣿⣿⣿⣿⣿⣿⣿⣿⣿⣡⡄⠀⢀⠢⢁⣟⣦⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡈⠛⢟⡿⠿⢧⣾⢝⡩⠂⣁⣤⣷⢿⣫⣿⣿⢿⣿⣿⣿⣿⣿⣷⣿⣿⡿⠆⠀⢸⠠⢿⢿⡯⣿⢷⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠘⢿⣶⣶⣤⣤⣴⣠⣤⣄⡉⣤⡘⠚⢈⡃⢩⣪⣿⣿⣟⣵⣿⣿⣿⣷⣿⣿⣿⣿⣿⡿⢦⣔⢒⣽⣿⡉⣋⣿⣽⣾⢒⡿⡛⣿⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⠈⠹⣿⣿⣿⣿⣿⣿⣿⣿⣾⣷⣾⣰⢲⣾⣿⣯⣾⣿⣿⣿⣿⡟⣥⢷⣶⣻⣿⣽⣾⣿⡇⠐⠻⠿⠿⠿⠿⠿⠁⠀⠟⠻⠙⣷⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⡀⠀\n",
-            "⣄⠀⠄⣀⠂⠐⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⣿⣿⣿⣿⣿⣿⣿⢫⣾⣷⡟⠿⣿⣿⠿⠛⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠂\n",
-            "⣿⣷⣴⣈⣻⣜⣘⡽⣮⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢣⣿⣿⣿⣿⠀⠈⠀⠀⠀⠀⠀⠀⠀⠰⢲⣶⣶⣶⣾⣷⣾⣶⠀⠀⠀⣰⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⣿⣿⣿⣿⣿⣿⣿⣽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⡿⣿⡿⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⡟⣾⡕⣝⣱⡏⠆⢐⡼⢿⣇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣤⠀⠀⣀⠀⠀⠀⠁⠀⠄⠀⠀⢀⠀⢸⡟⠾⠯⠙⠻⡔⢰⣣⣾⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⡕⠀⣼⣟⠰⠀⠀⠀⠀⠀⢀⣀⣠⣠⣀⠀⠶⣶⡶⣄⣀⢳⣯⢯⡹⣏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⣡⢠⣟⣛⣶⡂⠀⢰⣧⣼⣧⣀⠘⣷⢚⣻⣤⣿⣾⣿⣫⣻⣿⢌⣇⠌⠀⠀⠀⠀⠀⠀⠀⠀⣤⠀⠀⠀⠀\n",
-            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣷⣶⣿⣿⣿⣿⣦⣸⣿⣿⣿⣿⣶⣾⣿⣻⡟⣼⣮⣻⠿⢹⢻⡞⡘⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀\n",
-            "⣿⡛⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣻⣟⣿⣿⣖⢓⣱⡕⢟⡵⠛⠲⠁⠀⠀⠀⠀⠀⠄⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠛⠀⠈⠻⠿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣯⣮⣳⣿⡙⢹⣿⣷⣧⠽⠉⠡⡒⠅⡀⠀⠀⠀⠀⠈⠀⠀⠀⠀⢀⠀⠀⠀⠀\n",
-            "⠀⠄⠀⠀⠀⠠⣬⣍⠉⢽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⣻⣟⠻⢿⣷⠤⢄⣀⡤⠒⠁⠐⡠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n",
-            "⠀⠀⠀⢐⡄⢀⣫⣷⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣲⢶⣒⣂⣡⡴⢻⠅⠶⢊⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡆⠀\n",
-            "⠐⠂⠃⢠⣴⣯⡟⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣯⠘⠒⠈⢩⣥⣬⠀⠐⠐⢩⠀⠀⠀⠀⠂⠀⠀⠀⠀⠀⠀⠀⢠⠁⠀\n",
-            "⢂⣤⠲⢚⡵⢋⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣲⢫⣬⡬⣭⢖⡶⡏⣞⡼⠁⠀⠀⠀⠀⠀⠐⠀⠀⠀⡸⠀⠀\n",
-            "⣳⣈⢨⢕⣽⣟⣻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣹⣿⣿⣿⣿⣶⣿⣶⣿⣿⣿⠟⢀⡄⠀⠄⠀⠂⠔⠀⠀⠀⢀⠃⠀⠀\n",
-            "⣿⣿⣆⡚⢿⣿⣞⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⡫⣐⣜⠵⠢⢂⠠⠀⠁⠀⠀⠀⢀⠎⠀⠀⠀\n",
-            "⣿⣿⣿⣿⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣫⡽⠟⠻⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣽⣿⣿⣯⣴⡚⢛⠒⠀⡀⣀⣠⠥⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀\n",
-            "⣿⣿⣿⡿⣽⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⣝⣻⣿⣿⣄⠐⣶⣤⡤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣾⣿⣶⠿⡛⠃⢀⠄⠀⠐⠀⠄⠀⠀⠀⠀⠀⢠\n",
-            "⣿⣿⣿⣿⣿⣿⡿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃⢀⡈⠳⢿⡿⠟⣡⣿⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣛⠛⠿⠯⠾⢛⣁⣠⣲⠀⢀⠁⠀⠀⠀⠀⠀⠀⢀⡴⠁\n",
-            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⣴⣾⣿⣶⣦⣶⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣭⣀⣦⢨⣉⣥⣋⡤⠀⠂⠀⠀⠀⣀⠔⠋⠀⠀\n",
-            "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢿⠿⣻⢁⣧⣔⠦⠀⠀⠈⠀⠀⠀⠀⠀\n",
-            "R  E  S  O  N  A  N  T     D  E  P  O  L  A  R  I  S  A  T  I  O  N ",
-        )
 
-        # perpetual GUI settings
         QCoreApplication.setOrganizationName("Physics")
         QCoreApplication.setApplicationName("Resonant Depolarisation (simple)")
 
@@ -153,16 +115,11 @@ class MainWindow(QWidget):
         self.resdepQt = QtWorkerDecorator(self.resdep)
         # Connect emitted signals from worker (wrapped resdep)
         # to GUI update (member) functions (slots)
-        self.resdepQt.progress.connect(self.on_progress_update)
-        self.resdepQt.status.connect(self.on_status_update)
-        self.resdepQt.data_path.connect(self.on_data_path_update)
-        self.resdepQt.finished.connect(self.on_finish)
-
-        # helper classes
-        self.processed_data = ProcessedData(resdep=self.resdep)
-        self.fitter = Fitter(
-            resdep=self.resdep, processed_data=self.processed_data
-        )
+        self.resdepQt.progress.connect(self.__on_progress_update)
+        self.resdepQt.status.connect(self.__on_status_update)
+        self.resdepQt.data_path.connect(self.__on_data_path_update)
+        self.resdepQt.results.connect(self.__on_results)
+        self.resdepQt.finished.connect(self.__on_finish)
 
         # init window
         self.setWindowTitle("Resonant Depolarisation")
@@ -240,7 +197,7 @@ class MainWindow(QWidget):
 
         # status bar -------------------------------- #
         self.status_bar = QStatusBar()
-        self.on_status_update("Ready")
+        self.__on_status_update("Ready")
 
         # add everything to window
         main_window_layout.addWidget(
@@ -555,7 +512,7 @@ class MainWindow(QWidget):
         if not self._automatic_scan_enabled:
             self.button_automatic.setEnabled(False)
         # update status bar
-        self.on_status_update("Starting up...")
+        self.__on_status_update("Starting up...")
 
         # update progress bar
         self.resdep._calculate_range()
@@ -567,7 +524,7 @@ class MainWindow(QWidget):
 
         return None
     #--------------------------------------------------------------------------
-    def on_progress_update(self, step: int) -> None:
+    def __on_progress_update(self, step: int) -> None:
         """
         Simply update the value of the progress bar.
         Uses emitted signal from resdep (worker wrapper)
@@ -576,7 +533,7 @@ class MainWindow(QWidget):
 
         return None
     #--------------------------------------------------------------------------
-    def on_status_update(self, message: str) -> None:
+    def __on_status_update(self, message: str) -> None:
         """
         Updates the GUI statues 
         (primarily from running to sleeping on injection)
@@ -584,7 +541,7 @@ class MainWindow(QWidget):
         self.status_bar.showMessage(f"Status: {message}")
         return None
     #--------------------------------------------------------------------------
-    def on_data_path_update(self, data_path: Path) -> None:
+    def __on_data_path_update(self, data_path: Path) -> None:
         """
         Assign data path from resdep to GUI button.
         """
@@ -593,7 +550,19 @@ class MainWindow(QWidget):
 
         return None
     #--------------------------------------------------------------------------
-    def on_finish(
+    def __on_results(
+            self, 
+            formatted_beam_energy: str, 
+            error: Optional[str]
+        ) -> None:
+        if error is not None:
+            self.error_label.setText(error)
+            return None
+
+        self.beam_energy_label.setText(formatted_beam_energy)
+        return None
+    #--------------------------------------------------------------------------
+    def __on_finish(
         self,
     ) -> None:
         """
@@ -603,7 +572,7 @@ class MainWindow(QWidget):
         Start timers for repolarisation and countdown to next scan 
         (if automatic scans enabled).
         """
-        self.on_status_update(
+        self.__on_status_update(
             "Experiment finished. Performing data analysis..."
         )
 
@@ -621,18 +590,15 @@ class MainWindow(QWidget):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(100)
 
-        if (not self._abort_requested) and (self.resdep._has_stored_data):
-            self.fit_beam_energy()
-
         # Timer things
         # self.timer.stop()
         self.repolarisation_time_elapsed: int = 0
         self.repolarisation_timer.start()
         if self._automatic_scan_enabled:
             self._start_automatic_scan_countdown()
-            self.on_status_update("Waiting for next automatic scan...")
+            self.__on_status_update("Waiting for next automatic scan...")
         else:
-            self.on_status_update("Ready")
+            self.__on_status_update("Ready")
 
         if self._abort_requested:
             self._abort_requested = False
@@ -700,46 +666,6 @@ class MainWindow(QWidget):
         # stop after enough time
         if self.repolarisation_time_elapsed >= 7790:
             self.repolarisation_timer.stop()
-
-        return None
-    #--------------------------------------------------------------------------
-    def fit_beam_energy(
-        self,
-    ) -> None:
-        """
-        Calls magic fitting functions from 
-        [`_fitting`][resdep._fitting] to extract beam energy from data.
-        """
-        error: Optional[str] = None
-        formatted_beam_energy: str = ""
-
-        try:  # try block so GUI doesn't crash
-            self.processed_data.calculate_ratio_loss()
-
-            *_, formatted_beam_energy, error = self.fitter.automagic_fit()
-            
-
-        # Catch something critical that `automagic_fit()` does not handle
-        except Exception:
-            error: str = traceback.format_exc()
-            self.logger.error(error)
-
-        finally:
-            # update GUI
-            if error is not None:
-                self.error_label.setText(error)
-                return None
-
-            self.beam_energy_label.setText(formatted_beam_energy)
-            with open(self.data_path / "beam_energy.txt", "w") as f:
-                f.write(formatted_beam_energy)
-            if (self.data_path / "beam_energy.txt").exists():
-                logging.debug("beam energy txt file saved successfully.")
-            else:
-                logging.debug("beam energy txt file not saved :(")
-
-        # TODO: write to PV????
-        # beam_energy_PV.put(E0_mean_sigfig)
 
         return None
     #--------------------------------------------------------------------------
@@ -1000,7 +926,7 @@ class MainWindow(QWidget):
             self.button_automatic.setStyleSheet(
                 "QPushButton {background-color: orange;}"
             )
-            self.on_status_update("Waiting for next automatic scan...")
+            self.__on_status_update("Waiting for next automatic scan...")
             self._automatic_scan_enabled = True
             self._apply_default_scan_settings()
             self.automatic_scan()
@@ -1028,7 +954,7 @@ class MainWindow(QWidget):
                     self.button_automatic.setEnabled(False)
 
             else:  # if experiment is not running
-                self.on_status_update("Ready")
+                self.__on_status_update("Ready")
 
         return None
     #--------------------------------------------------------------------------
@@ -1156,19 +1082,21 @@ class QtWorkerDecorator(QObject):
     data_path = Signal(Path)
     start_timer = Signal()
     ADC_windows = Signal(list, str)  # ADC windows, depolarised bunches
-    finished = Signal()
+    results = Signal(str, str) # formatted_beam_energy (results), error
+    finished = Signal() 
     #--------------------------------------------------------------------------
     def __init__(self, worker: ResonantDepolarisation) -> None:
         super().__init__()
         self.worker = worker
 
         # Inject callbacks into the worker
-        self.worker.progress_callback = self._emit_progress
-        self.worker.plot_callback = self._emit_new_plot_info
-        self.worker.status_callback = self._emit_status
-        self.worker.data_path_callback = self._emit_data_path
-        self.worker.timer_callback = self._emit_start_timer
-        self.worker.ADC_windows_callback = self._emit_new_ADC_windows
+        self.worker.__progress_callback = self._emit_progress
+        self.worker.__plot_callback = self._emit_new_plot_info
+        self.worker.__status_callback = self._emit_status
+        self.worker.__data_path_callback = self._emit_data_path
+        self.worker.__timer_callback = self._emit_start_timer
+        self.worker.__ADC_windows_callback = self._emit_new_ADC_windows
+        self.worker.__results_callback = self._emit_results
 
         return None
     #--------------------------------------------------------------------------
@@ -1203,6 +1131,12 @@ class QtWorkerDecorator(QObject):
         self, ADC_windows: list[int], depolarised_bunches: str
     ) -> None:
         self.ADC_windows.emit(ADC_windows, depolarised_bunches)
+        return None
+    #--------------------------------------------------------------------------
+    def _emit_results(
+        self, formatted_beam_energy: str, error: str
+    ) -> None:
+        self.results.emit(formatted_beam_energy, error)
         return None
     #--------------------------------------------------------------------------
     def run(

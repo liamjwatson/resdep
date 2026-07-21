@@ -134,43 +134,44 @@ class ResonantDepolarisation:
     """                                                                     
     def __init__(
         self,
-        progress_callback: Optional[Callable] = None,
-        plot_callback: Optional[Callable] = None,
-        status_callback: Optional[Callable] = None,
-        data_path_callback: Optional[Callable] = None,
-        timer_callback: Optional[Callable] = None,
-        ADC_windows_callback: Optional[Callable] = None,
+        __progress_callback: Optional[Callable] = None,
+        __plot_callback: Optional[Callable] = None,
+        __status_callback: Optional[Callable] = None,
+        __data_path_callback: Optional[Callable] = None,
+        __timer_callback: Optional[Callable] = None,
+        __ADC_windows_callback: Optional[Callable] = None,
+        __results_callback: Optional[Callable] = None,
     ) -> None:
         """
         Initialise default scan values.
 
         Parameters
         ----------
-        progress_callback:
+        __progress_callback:
             Passed progress update (`step`: [`int`][]) emitted by worker 
             function spawned by GUI.
             Links to progress bar in either 
             [`resdepGUI`][resdep.resdepGUI.MainWindow.on_progress_update] 
             or
             [`simpleGUI`][resdep.simpleGUI.MainWindow.on_progress_update]
-        plot_callback:
+        __plot_callback:
             Live plotting data (
             `freqs`, `beam_loss_window_1`, `beam_loss_window_2`
             )
             plotted to 
             [`resdepGUI`][resdep.resdepGUI.MainWindow.on_new_plot_info].
-        status_callback:
+        __status_callback:
             Experiment status ([`str`][]) to displayed on either
             [`resdepGUI`][resdep.resdepGUI.MainWindow.on_status_update] 
             or
             [`simpleGUI`][resdep.simpleGUI.MainWindow.on_status_update]
-        data_path_callback:
+        __data_path_callback:
             data path ([`pathlib.Path`][]) to passed to GUI for 
             saving GUI config / settings.
-        timer_callback:
+        __timer_callback:
             An emitted signal of when to start / stop the experiment timer.
             Links to [`resdepGUI`][resdep.resdepGUI.MainWindow.on_start_timer]
-        ADC_windows_callback:
+        __ADC_windows_callback:
             Pass back ADC windows applied to BLMs,
             specifically for [`resdepGUI`][resdep.resdepGUI].
 
@@ -179,12 +180,12 @@ class ResonantDepolarisation:
         Example usage / implementation in the `Class` scope.
 
         ```py
-        self.status_callback("Finished!")
+        self.__status_callback("Finished!")
 
         path = Path("usr/data/example")
-        self.data_path_callback(path)
+        self.__data_path_callback(path)
 
-        self.timer_callback()
+        self.__timer_callback()
         ```
 
         Notes
@@ -198,15 +199,16 @@ class ResonantDepolarisation:
         """                                               
         self._config_logger()
 
-        self.progress_callback = progress_callback
-        self.plot_callback = plot_callback
-        if status_callback is not None:
-            self.status_callback = status_callback
+        self.__progress_callback = __progress_callback
+        self.__plot_callback = __plot_callback
+        if __status_callback is not None:
+            self.__status_callback = __status_callback
         else:
-            self.status_callback = self.logger.info
-        self.data_path_callback = data_path_callback
-        self.timer_callback = timer_callback
-        self.ADC_windows_callback = ADC_windows_callback
+            self.__status_callback = self.logger.info
+        self.__data_path_callback = __data_path_callback
+        self.__timer_callback = __timer_callback
+        self.__ADC_windows_callback = __ADC_windows_callback
+        self.__results_callback = __results_callback
         self._abort_requested = False
 
         # --- init states
@@ -301,7 +303,7 @@ class ResonantDepolarisation:
             - Saves and plots data on experiment end or [`KeyboardInterrupt`][]
         - Listens for injections -> turns off kicker and sleeps for 10 s (
             through PV callback 
-            [`_on_value_change`][resdep.experiment.ResonantDepolarisation._on_value_change]
+            [`__on_value_change`][resdep.experiment.ResonantDepolarisation.__on_value_change]
         )
         - Listens for abort requests from the optional GUIs
         - Updates experiment progress to progress bar on GUI or console
@@ -315,12 +317,12 @@ class ResonantDepolarisation:
             self._config_data_path()
             self._calc_revolution_frequency_from_master_RF()
             self._calculate_range()
-            self.status_callback("Setting up PVs...")
+            self.__status_callback("Setting up PVs...")
             self._load_PVs()
             self._config_save_objects()
             self.calculate_adc_counter_windows(sector=1)
 
-            self.injection_trigger.add_callback(callback=self._on_value_change)
+            self.injection_trigger.add_callback(callback=self.__on_value_change)
 
             self.blm.apply_full_decimation()
             self.blm.apply_adc_counter_masks(
@@ -349,10 +351,10 @@ class ResonantDepolarisation:
             self.logger.info("|------------- EXPERIMENT DONE ! ------------|")
             self.logger.info("|--------------------------------------------|")
 
-            self.status_callback("Cleaning up...")
+            self.__status_callback("Cleaning up...")
 
-            if self.progress_callback is not None:
-                self.progress_callback(self.sweep_steps)
+            if self.__progress_callback is not None:
+                self.__progress_callback(self.sweep_steps)
 
             if self._has_stored_data:
                 self.save_data()
@@ -387,12 +389,23 @@ class ResonantDepolarisation:
             self.blm.restore_inits(mode="adc_counter_masks")
             self.blm.restore_inits(mode="decimation")
 
-            if self.plot_callback is None:
+            if self.__plot_callback is None:
                 self.logger.info(
                     "To manually plot data from the terminal, "
                      + "run class method `plot_data()`, "
                      + "or edit and run scripts\\plotdata.py"
                 )
+
+            if not self._abort_requested and self._has_stored_data:
+                self.__status_callback("Analysing data...")
+                formatted_beam_energy, error = self._post_processing()
+
+                if error is not None:
+                    self.logger.error(error)
+                else:
+                    self.logger.info("Beam energy = {formatted_beam_energy}")
+                if self.__results_callback is not None:
+                    self.__results_callback(formatted_beam_energy, error)
 
             self.logger.info("Done everything :)")
 
@@ -407,7 +420,7 @@ class ResonantDepolarisation:
         duration_seconds: int
             Length of time to collect data in seconds
         """
-        self.status_callback("Collecting baseline BPM data (10 s)...")
+        self.__status_callback("Collecting baseline BPM data (10 s)...")
 
         # init kicker drive (except amp) here so that save_data() 
         # collects values that are set to the start of the sweep range, 
@@ -438,7 +451,7 @@ class ResonantDepolarisation:
         while time.time() <= end_time:
             self._log_data()
             if self._abort_requested:
-                self.status_callback("Experiment interrupted!")
+                self.__status_callback("Experiment interrupted!")
                 raise InterruptedError
 
             time.sleep(1/self.log_frequency)
@@ -458,9 +471,9 @@ class ResonantDepolarisation:
             time.sleep(0.05)
             
         step: int = 0
-        self.status_callback("Running")
-        if self.timer_callback is not None:
-            self.timer_callback()
+        self.__status_callback("Running")
+        if self.__timer_callback is not None:
+            self.__timer_callback()
 
         next_kicker_call: float = time.time() + self.dwell_time
         next_log_call: float = time.time() + 1/self.log_frequency
@@ -485,16 +498,16 @@ class ResonantDepolarisation:
                 next_log_call: float = time.time() + 1/self.log_frequency
 
             if now >= next_progress_update_call:
-                if self.progress_callback is not None:
-                    self.progress_callback(step)
+                if self.__progress_callback is not None:
+                    self.__progress_callback(step)
                 else:
                     printProgressBar(
                         iteration=step,
                         total=self.sweep_steps,
                         decimals=2,
                     )
-                if self.plot_callback is not None:
-                    self.plot_callback(
+                if self.__plot_callback is not None:
+                    self.__plot_callback(
                         self.freqs,
                         self.beam_loss_window_1,
                         self.beam_loss_window_2,
@@ -505,25 +518,64 @@ class ResonantDepolarisation:
 
             if self._injecting:
                 self.kicker_amp_PV.put(0)
-                self.status_callback("Sleeping (injection), kicker => OFF")
+                self.__status_callback("Sleeping (injection), kicker => OFF")
 
-                self._interruptible_sleep(10)
+                self.__interruptible_sleep(10)
 
                 self.kicker_amp_PV.put(
                     self.set_kicker_amp, use_complete=True
                 )
                 while not self.kicker_amp_PV.put_complete:
                     time.sleep(0.05)
-                self.status_callback("Running")
+                self.__status_callback("Running")
                 self._injecting = False
 
             if self._abort_requested:
-                self.status_callback("Experiment aborted!")
+                self.__status_callback("Experiment aborted!")
                 raise InterruptedError
 
             time.sleep(0.01)
 
         return None
+    # -------------------------------------------------------------------------
+    def _post_processing(self) -> tuple[str, Optional[str]]:
+        """
+        Post processing data analysis pipeline.
+        Create ProcessedData object, calculate ratio_loss().
+        Perform fit, calculate stats, return formatted result.
+        """
+        error = None
+        formatted_beam_energy = ""
+
+        try:  
+            processed_data = ProcessedData(resdep=self)
+            fitter = Fitter(processed_data, self)
+            processed_data.calculate_ratio_loss()
+
+            *_, formatted_beam_energy, error = fitter.automagic_fit()
+            
+            processed_data.save_data()
+
+        # Catch something critical that `automagic_fit()` does not handle
+        except Exception:
+            error: str = traceback.format_exc()
+            self.logger.error(error)
+
+        finally:
+            # update GUI
+            if error is not None:
+                formatted_beam_energy = "Error with fit."
+                return formatted_beam_energy, error
+
+            with open(self.data_path / "beam_energy.txt", "w") as f:
+                f.write(formatted_beam_energy)
+            if (self.data_path / "beam_energy.txt").exists():
+                logging.debug("beam energy txt file saved successfully.")
+            else:
+                logging.debug("beam energy txt file not saved.")
+
+        return formatted_beam_energy, error
+
     # -------------------------------------------------------------------------
     def _calculate_range(
         self,
@@ -969,8 +1021,8 @@ class ResonantDepolarisation:
             self.data_path = self.data_path / seconds_str
             Path.mkdir(self.data_path, parents=True)
 
-        if self.data_path_callback is not None:
-            self.data_path_callback(self.data_path)
+        if self.__data_path_callback is not None:
+            self.__data_path_callback(self.data_path)
 
         handlers = self.logger.handlers.copy()
         for handler in handlers:
@@ -1248,12 +1300,12 @@ class ResonantDepolarisation:
             self.blm.sumdec_periods_PV[f"{sector}"].put(
                 SUMDEC_PERIODS
             )  
-            self.status_callback(
+            self.__status_callback(
                     "Waiting for injection to update integrated buffer..."
                 )
             while not self._injecting:
-                self._interruptible_sleep(1)
-            self.status_callback(
+                self.__interruptible_sleep(1)
+            self.__status_callback(
                     "Time aligning BLM ADC windows and BbB system..."
                 )
 
@@ -1365,8 +1417,8 @@ class ResonantDepolarisation:
         ] = adc_counter_windows
 
         # update GUI
-        if self.ADC_windows_callback is not None:
-            self.ADC_windows_callback(
+        if self.__ADC_windows_callback is not None:
+            self.__ADC_windows_callback(
                 adc_counter_windows, _depolarised_bunches
             )
 
@@ -1565,7 +1617,7 @@ class ResonantDepolarisation:
     # *---------- PV callbacks --------* #
     # *--------------------------------* #
     # -------------------------------------------------------------------------
-    def _on_value_change(self, pvname=None, value=None, host=None, **kws) -> None:
+    def __on_value_change(self, pvname=None, value=None, host=None, **kws) -> None:
         """
         PV callback that listens for injections and changes `_injecting` state.
         Used to sleep around injections during experimnent loop.
@@ -1609,7 +1661,7 @@ class ResonantDepolarisation:
     # *----------- Utilities ----------* #
     # *--------------------------------* #
     # -------------------------------------------------------------------------
-    def _interruptible_sleep(self, seconds: int) -> None:
+    def __interruptible_sleep(self, seconds: int) -> None:
         """
         Sleeps over long periods of time, waking often to check states 
         (for example: `abort`).
