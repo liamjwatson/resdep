@@ -122,8 +122,8 @@ class BPMs(ABC):
     pitch, yaw = foo_bpms.calculate_angles()
     plt.plot(yaw["1|2"]) # plot yaw between bpm 1 and bpm 2
     ```
-    """
-
+    """                                                                     
+                    
     def __init__(
         self,
     ) -> None:

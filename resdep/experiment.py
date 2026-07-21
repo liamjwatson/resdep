@@ -354,7 +354,10 @@ class ResonantDepolarisation:
             self.__status_callback("Cleaning up...")
 
             if self.__progress_callback is not None:
-                self.__progress_callback(self.sweep_steps)
+                self.__progress_callback(
+                        step = self.sweep_steps,
+                        max_steps = self.sweep_steps
+                )
 
             if self._has_stored_data:
                 self.save_data()
@@ -499,7 +502,10 @@ class ResonantDepolarisation:
 
             if now >= next_progress_update_call:
                 if self.__progress_callback is not None:
-                    self.__progress_callback(step)
+                    self.__progress_callback(
+                            step=step,
+                            max_steps=self.sweep_steps
+                    )
                 else:
                     printProgressBar(
                         iteration=step,

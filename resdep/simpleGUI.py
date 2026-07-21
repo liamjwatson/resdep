@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 Barebones Qt layout for running resdep experiments.
 One button to enable automatic scans during user beam.
@@ -56,6 +56,10 @@ from PySide6.QtCore import (
 
 # resdep
 from resdep.experiment import ResonantDepolarisation
+from resdep._experiment_handlers import (
+        ExperimentHandler, 
+        ExperimentHandlerFactory
+)
 from resdep._archiver import check_recent_beam_injection
 
 class BeamMode(IntEnum):
@@ -97,9 +101,9 @@ class MainWindow(QWidget):
     >>> ipython3 -m resdep.simpleGUI
     ```
 
-    """         
+    """                         
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, Handler: type[ExperimentHandler], *args, **kwargs):
         super().__init__(*args, **kwargs)
 
 
@@ -112,14 +116,14 @@ class MainWindow(QWidget):
         # define thread for resdep
         self.thread_manager = QThreadPool()
         # decorate resdep
-        self.resdepQt = QtWorkerDecorator(self.resdep)
+        self.experiment_handler = Handler()
         # Connect emitted signals from worker (wrapped resdep)
         # to GUI update (member) functions (slots)
-        self.resdepQt.progress.connect(self.__on_progress_update)
-        self.resdepQt.status.connect(self.__on_status_update)
-        self.resdepQt.data_path.connect(self.__on_data_path_update)
-        self.resdepQt.results.connect(self.__on_results)
-        self.resdepQt.finished.connect(self.__on_finish)
+        self.experiment_handler.progress.connect(self.__on_progress_update)
+        self.experiment_handler.status.connect(self.__on_status_update)
+        self.experiment_handler.data_path.connect(self.__on_data_path_update)
+        self.experiment_handler.results.connect(self.__on_results)
+        self.experiment_handler.finished.connect(self.__on_finish)
 
         # init window
         self.setWindowTitle("Resonant Depolarisation")
@@ -520,15 +524,16 @@ class MainWindow(QWidget):
 
         # call resdep
         self._running_experiment: bool = True
-        self.thread_manager.start(self.resdepQt.run)
+        self.thread_manager.start(self.experiment_handler.run)
 
         return None
     #--------------------------------------------------------------------------
-    def __on_progress_update(self, step: int) -> None:
+    def __on_progress_update(self, step: int, max_steps: int) -> None:
         """
         Simply update the value of the progress bar.
         Uses emitted signal from resdep (worker wrapper)
         """
+        self.progress_bar.setMaximum(max_steps)
         self.progress_bar.setValue(step)
 
         return None
@@ -999,7 +1004,7 @@ class MainWindow(QWidget):
         self.logger.critical("Abort requested!")
         self._disable_abort_button()
         self._abort_requested = True
-        self.resdepQt.abort()
+        self.experiment_handler.abort()
 
         return None
     #--------------------------------------------------------------------------
@@ -1068,106 +1073,14 @@ class MainWindow(QWidget):
         return None
 
 
-class QtWorkerDecorator(QObject):
-    """
-    Qt wrapper for resonant depolarisation.
-    Defines emitted signals and attaches them to the worker.
-    The worker must contain these callbacks to emit signals.
-    """
-
-    # define emitted signals (from resdep)
-    progress = Signal(int)  # step
-    new_plot_info = Signal(list, dict, dict)
-    status = Signal(str)  # status: message
-    data_path = Signal(Path)
-    start_timer = Signal()
-    ADC_windows = Signal(list, str)  # ADC windows, depolarised bunches
-    results = Signal(str, str) # formatted_beam_energy (results), error
-    finished = Signal() 
-    #--------------------------------------------------------------------------
-    def __init__(self, worker: ResonantDepolarisation) -> None:
-        super().__init__()
-        self.worker = worker
-
-        # Inject callbacks into the worker
-        self.worker.__progress_callback = self._emit_progress
-        self.worker.__plot_callback = self._emit_new_plot_info
-        self.worker.__status_callback = self._emit_status
-        self.worker.__data_path_callback = self._emit_data_path
-        self.worker.__timer_callback = self._emit_start_timer
-        self.worker.__ADC_windows_callback = self._emit_new_ADC_windows
-        self.worker.__results_callback = self._emit_results
-
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_progress(self, step: int) -> None:
-        self.progress.emit(step)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_new_plot_info(
-        self,
-        freqs: list[float],
-        beam_loss_window_1: dict[str, list[float]],
-        beam_loss_window_2: dict[str, list[float]],
-    ) -> None:
-        self.new_plot_info.emit(freqs, beam_loss_window_1, beam_loss_window_2)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_status(self, message: str) -> None:
-        self.status.emit(message)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_data_path(self, data_path: Path) -> None:
-        self.data_path.emit(data_path)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_start_timer(
-        self,
-    ) -> None:
-        self.start_timer.emit()
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_new_ADC_windows(
-        self, ADC_windows: list[int], depolarised_bunches: str
-    ) -> None:
-        self.ADC_windows.emit(ADC_windows, depolarised_bunches)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_results(
-        self, formatted_beam_energy: str, error: str
-    ) -> None:
-        self.results.emit(formatted_beam_energy, error)
-        return None
-    #--------------------------------------------------------------------------
-    def run(
-        self,
-    ) -> None:
-        try:
-            self.worker.start_experiment()
-        finally:
-            self.finished.emit()
-        return None
-    #--------------------------------------------------------------------------
-    def abort(
-        self,
-    ) -> None:
-        self.worker.request_abort()
-        return None
-
-
-def spawn():
-    app = QApplication(sys.argv)
-    MainWindow()
-    if hasattr(sys, "ps1"):  # interactive check
-        app.exec()
-    else:
-        sys.exit(app.exec())
-
 
 # run the app
 if __name__ == "__main__":
+    experiment_handler: type[ExperimentHandler] = (
+            ExperimentHandlerFactory.create_handler(host_type="local")
+    )
     app = QApplication(sys.argv)
-    window = MainWindow()
+    window = MainWindow(experiment_handler)
     if hasattr(sys, "ps1"):  # interactive check
         app.exec()
     else:
