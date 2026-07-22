@@ -13,26 +13,42 @@ if __name__ == "__main__":
 or something a little more elegant.
 """             
 
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
+from enum import Enum
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, SignalInstance
 
 from resdep.experiment import ResonantDepolarisation
+from resdep import simpleGUI
 
+class HostType(Enum):
+    LOCAL = "local"
+    REMOTE = "remote"
 
-class ExperimentHandler(ABC):
+@runtime_checkable
+class SupportsStatusSignal(Protocol):
+    status: SignalInstance  # status: message
+@runtime_checkable
+class SupportsPlotSignal(Protocol):
+    new_plot_info: SignalInstance
+@runtime_checkable
+class SupportsDataPathSignal(Protocol):
+    data_path: SignalInstance
+@runtime_checkable
+class SupportsStartTimerSignal(Protocol):
+    start_timer: SignalInstance
+@runtime_checkable
+class SupportsADCWindowsSignal(Protocol):
+    ADC_windows: SignalInstance  # ADC windows, depolarised bunches
+
+class ExperimentHandler(ABC, QObject):
     """
     Experiment handler iterface. 
     Contains particular attributes and callbacks for GUI functionality.
     """
     progress = Signal(int, int)  # current step, max steps
-    new_plot_info = Signal(list, dict, dict)
-    status = Signal(str)  # status: message
-    data_path = Signal(Path)
-    start_timer = Signal()
-    ADC_windows = Signal(list, str)  # ADC windows, depolarised bunches
     results = Signal(str, str) # formatted_beam_energy (results), error
     finished = Signal() 
 
@@ -45,61 +61,31 @@ class ExperimentHandler(ABC):
     @abstractmethod
     def abort(self):...
 
-    #--------------------------------------------------------------------------
-    def _emit_progress(self, step: int, max_steps: int) -> None:
-        self.progress.emit(step, max_steps)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_new_plot_info(
-        self,
-        freqs: list[float],
-        beam_loss_window_1: dict[str, list[float]],
-        beam_loss_window_2: dict[str, list[float]],
-    ) -> None:
-        self.new_plot_info.emit(freqs, beam_loss_window_1, beam_loss_window_2)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_status(self, message: str) -> None:
-        self.status.emit(message)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_data_path(self, data_path: Path) -> None:
-        self.data_path.emit(data_path)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_start_timer(
-        self,
-    ) -> None:
-        self.start_timer.emit()
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_new_ADC_windows(
-        self, ADC_windows: list[int], depolarised_bunches: str
-    ) -> None:
-        self.ADC_windows.emit(ADC_windows, depolarised_bunches)
-        return None
-    #--------------------------------------------------------------------------
-    def _emit_results(
-        self, formatted_beam_energy: str, error: str
-    ) -> None:
-        self.results.emit(formatted_beam_energy, error)
-        return None
+    @abstractmethod
+    def emit_progress(self, step: int, max_steps: int):...
+        
+    @abstractmethod
+    def emit_results(self, formatted_beam_energy: str, error: str):...
 
-class LocalQtDecorator(ExperimentHandler, QObject):
+class LocalQtDecorator(ExperimentHandler):
     """
     Qt wrapper for resonant depolarisation.
     Defines emitted signals and attaches them to the worker.
     The worker must contain these callbacks to emit signals.
     """
-
+    new_plot_info = Signal(list, dict, dict)
+    status = Signal(str)  # status: message
+    data_path = Signal(Path)
+    start_timer = Signal()
+    ADC_windows = Signal(list, str)  # ADC windows, depolarised bunches
     #--------------------------------------------------------------------------
     def __init__(self) -> None:
         super().__init__()
         self.worker = ResonantDepolarisation()
-        self.worker.__progress_callback = self._emit_progress
-        self.worker.__status_callback = self._emit_status
-        self.worker.__data_path_callback = self._emit_data_path
-        self.worker.__results_callback = self._emit_results
+        self.worker.progress_callback = self.emit_progress
+        self.worker.status_callback = self.emit_status
+        self.worker.data_path_callback = self.emit_data_path
+        self.worker.results_callback = self.emit_results
 
         return None
     #--------------------------------------------------------------------------
@@ -117,8 +103,47 @@ class LocalQtDecorator(ExperimentHandler, QObject):
     ) -> None:
         self.worker.request_abort()
         return None
+    #--------------------------------------------------------------------------
+    def emit_progress(self, step: int, max_steps: int) -> None:
+        self.progress.emit(step, max_steps)
+        return None
+    #--------------------------------------------------------------------------
+    def emit_results(
+        self, formatted_beam_energy: str, error: str
+    ) -> None:
+        self.results.emit(formatted_beam_energy, error)
+        return None
+    #--------------------------------------------------------------------------
+    def emit_new_plot_info(
+        self,
+        freqs: list[float],
+        beam_loss_window_1: dict[str, list[float]],
+        beam_loss_window_2: dict[str, list[float]],
+    ) -> None:
+        self.new_plot_info.emit(freqs, beam_loss_window_1, beam_loss_window_2)
+        return None
+    #--------------------------------------------------------------------------
+    def emit_status(self, message: str) -> None:
+        self.status.emit(message)
+        return None
+    #--------------------------------------------------------------------------
+    def emit_data_path(self, data_path: Path) -> None:
+        self.data_path.emit(data_path)
+        return None
+    #--------------------------------------------------------------------------
+    def emit_start_timer(
+        self,
+    ) -> None:
+        self.start_timer.emit()
+        return None
+    #--------------------------------------------------------------------------
+    def emit_new_ADC_windows(
+        self, ADC_windows: list[int], depolarised_bunches: str
+    ) -> None:
+        self.ADC_windows.emit(ADC_windows, depolarised_bunches)
+        return None
 
-class IOCInterface(ExperimentHandler, QObject):
+class IOCInterface(ExperimentHandler):
     """
     Communication interface between Qt GUI and IOC running resdep
     """
@@ -151,20 +176,29 @@ class IOCInterface(ExperimentHandler, QObject):
         # something like, send_cmd("abort")
         pass
 
-    def _update_progress(self) -> None:
+    def emit_progress(self, step: int, max_steps: int) -> None:
         # something like
         # progress = some_pv_defined_in_init.get()
-        # self._emit_progress(*progress)
+        # self.emit_progress(*progress)
         pass 
+    
+    def emit_results(
+        self, formatted_beam_energy: str, error: str
+    ) -> None:
+        # get some PV values
+        # Possibly cast error enum 
+        # emit to GUI
+        pass
+
 
 class ExperimentHandlerFactory():
-    handler_types: dict[str, type[ExperimentHandler]] = {
-            "local": LocalQtDecorator,
-            "remote": IOCInterface
+    handler_types: dict[HostType, ExperimentHandler] = {
+            HostType.LOCAL: LocalQtDecorator(),
+            HostType.REMOTE: IOCInterface(),
     }
 
     @staticmethod
-    def create_handler(host_type: Literal["local", "remote"]):
+    def create_handler(host_type: HostType):
         handler = ExperimentHandlerFactory.handler_types.get(host_type)
         if handler is None:
             raise ValueError(
@@ -173,3 +207,72 @@ class ExperimentHandlerFactory():
             )
         return handler
     
+class ExperimentGuiBinder():
+    @staticmethod
+    def bind(
+        handler: ExperimentHandler,
+        gui: "simpleGUI.MainWindow"
+    ) -> None:
+        """ 
+        Binds additional singals in concrete ExperimentHandler subclass 
+        implementations to appropriately configured Slots in the GUI.
+        Binding only occurs if the slot exists, the ExperimentHandler 
+        satisfies a specific protocol (contract), and there is an appropriate 
+        Slot in the GUI.
+
+        1. Steps to add a new Signal (e.g. colour):
+
+            ```py title=_experiment_handlers.py
+                class ColourfulExperimentHandler(ExperimentHandler):
+                    colour = Signal(str) # <------------------------ New signal
+                    def __init__(self):
+                    ...
+                    def get_experiment_colour():
+                        # logic
+                        experiment_colour: str = ...
+                        # send colour to GUI
+                        self.colour.emit(experiment_colour)# <- emit new signal
+            ```
+
+        2. Define new protocol (contract):
+
+            ```py title=_experiment_handlers.py
+                class SupportsColorSignal(Protocol):
+                    colour: SignalInstance
+            ```
+
+        3. Define Slot in GUI that recieves new Signal
+
+            ```py title=simpleGUI.py
+                class MainWindow(QWidget):
+                    ...
+                    @Slot
+                    def _on_color(color: str):
+                        # update the GUI, for example:
+                        self.color_label.setText(color)
+            ```
+
+        4. Configure ExperimentGuiBinder (this class) to bind Signal to Slot:
+
+            ```py title=_experiment_handlers.py
+                class ExperimentGuiBinder():
+                    ...
+                    # check handler against Protocol (contract)
+                    if isinstance(handler, SupportsColorSignal):
+                        handler.color.connect(
+                            gui._on_color
+                        )
+            ```
+
+        """                                             
+        # Connect default signals and slots
+        handler.progress.connect(gui._on_progress_update)
+        handler.results.connect(gui._on_results)
+        handler.finished.connect(gui._on_finish)
+
+        # Optional signals
+        if isinstance(handler, SupportsStatusSignal):
+            handler.status.connect(gui._on_status_update)
+
+        if isinstance(handler, SupportsDataPathSignal):
+            handler.data_path.connect(gui._on_data_path_update)

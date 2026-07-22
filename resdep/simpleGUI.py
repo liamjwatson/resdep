@@ -55,10 +55,11 @@ from PySide6.QtCore import (
 )
 
 # resdep
-from resdep.experiment import ResonantDepolarisation
 from resdep._experiment_handlers import (
         ExperimentHandler, 
-        ExperimentHandlerFactory
+        ExperimentHandlerFactory,
+        ExperimentGuiBinder,
+        HostType
 )
 from resdep._archiver import check_recent_beam_injection
 
@@ -103,7 +104,7 @@ class MainWindow(QWidget):
 
     """                         
 
-    def __init__(self, Handler: type[ExperimentHandler], *args, **kwargs):
+    def __init__(self, experiment_handler: ExperimentHandler, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
 
@@ -111,19 +112,10 @@ class MainWindow(QWidget):
         QCoreApplication.setApplicationName("Resonant Depolarisation (simple)")
 
         #--------------------------------------- Resonant Depolarisation module
-        # import
-        self.resdep = ResonantDepolarisation()
         # define thread for resdep
         self.thread_manager = QThreadPool()
         # decorate resdep
-        self.experiment_handler = Handler()
-        # Connect emitted signals from worker (wrapped resdep)
-        # to GUI update (member) functions (slots)
-        self.experiment_handler.progress.connect(self.__on_progress_update)
-        self.experiment_handler.status.connect(self.__on_status_update)
-        self.experiment_handler.data_path.connect(self.__on_data_path_update)
-        self.experiment_handler.results.connect(self.__on_results)
-        self.experiment_handler.finished.connect(self.__on_finish)
+        self.experiment_handler = experiment_handler
 
         # init window
         self.setWindowTitle("Resonant Depolarisation")
@@ -201,7 +193,7 @@ class MainWindow(QWidget):
 
         # status bar -------------------------------- #
         self.status_bar = QStatusBar()
-        self.__on_status_update("Ready")
+        self._on_status_update("Ready")
 
         # add everything to window
         main_window_layout.addWidget(
@@ -516,7 +508,7 @@ class MainWindow(QWidget):
         if not self._automatic_scan_enabled:
             self.button_automatic.setEnabled(False)
         # update status bar
-        self.__on_status_update("Starting up...")
+        self._on_status_update("Starting up...")
 
         # update progress bar
         self.resdep._calculate_range()
@@ -528,7 +520,7 @@ class MainWindow(QWidget):
 
         return None
     #--------------------------------------------------------------------------
-    def __on_progress_update(self, step: int, max_steps: int) -> None:
+    def _on_progress_update(self, step: int, max_steps: int) -> None:
         """
         Simply update the value of the progress bar.
         Uses emitted signal from resdep (worker wrapper)
@@ -538,7 +530,7 @@ class MainWindow(QWidget):
 
         return None
     #--------------------------------------------------------------------------
-    def __on_status_update(self, message: str) -> None:
+    def _on_status_update(self, message: str) -> None:
         """
         Updates the GUI statues 
         (primarily from running to sleeping on injection)
@@ -546,7 +538,7 @@ class MainWindow(QWidget):
         self.status_bar.showMessage(f"Status: {message}")
         return None
     #--------------------------------------------------------------------------
-    def __on_data_path_update(self, data_path: Path) -> None:
+    def _on_data_path_update(self, data_path: Path) -> None:
         """
         Assign data path from resdep to GUI button.
         """
@@ -555,7 +547,7 @@ class MainWindow(QWidget):
 
         return None
     #--------------------------------------------------------------------------
-    def __on_results(
+    def _on_results(
             self, 
             formatted_beam_energy: str, 
             error: Optional[str]
@@ -567,7 +559,7 @@ class MainWindow(QWidget):
         self.beam_energy_label.setText(formatted_beam_energy)
         return None
     #--------------------------------------------------------------------------
-    def __on_finish(
+    def _on_finish(
         self,
     ) -> None:
         """
@@ -577,7 +569,7 @@ class MainWindow(QWidget):
         Start timers for repolarisation and countdown to next scan 
         (if automatic scans enabled).
         """
-        self.__on_status_update(
+        self._on_status_update(
             "Experiment finished. Performing data analysis..."
         )
 
@@ -601,9 +593,9 @@ class MainWindow(QWidget):
         self.repolarisation_timer.start()
         if self._automatic_scan_enabled:
             self._start_automatic_scan_countdown()
-            self.__on_status_update("Waiting for next automatic scan...")
+            self._on_status_update("Waiting for next automatic scan...")
         else:
-            self.__on_status_update("Ready")
+            self._on_status_update("Ready")
 
         if self._abort_requested:
             self._abort_requested = False
@@ -931,7 +923,7 @@ class MainWindow(QWidget):
             self.button_automatic.setStyleSheet(
                 "QPushButton {background-color: orange;}"
             )
-            self.__on_status_update("Waiting for next automatic scan...")
+            self._on_status_update("Waiting for next automatic scan...")
             self._automatic_scan_enabled = True
             self._apply_default_scan_settings()
             self.automatic_scan()
@@ -959,7 +951,7 @@ class MainWindow(QWidget):
                     self.button_automatic.setEnabled(False)
 
             else:  # if experiment is not running
-                self.__on_status_update("Ready")
+                self._on_status_update("Ready")
 
         return None
     #--------------------------------------------------------------------------
@@ -1076,11 +1068,12 @@ class MainWindow(QWidget):
 
 # run the app
 if __name__ == "__main__":
-    experiment_handler: type[ExperimentHandler] = (
-            ExperimentHandlerFactory.create_handler(host_type="local")
+    experiment_handler: ExperimentHandler = (
+            ExperimentHandlerFactory.create_handler(host_type=HostType.LOCAL)
     )
     app = QApplication(sys.argv)
-    window = MainWindow(experiment_handler)
+    gui = MainWindow(experiment_handler)
+    ExperimentGuiBinder.bind(experiment_handler, gui)
     if hasattr(sys, "ps1"):  # interactive check
         app.exec()
     else:
