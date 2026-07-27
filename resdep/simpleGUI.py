@@ -57,7 +57,9 @@ from PySide6.QtCore import (
 # resdep
 from resdep.experiment import ProcessedData, ResonantDepolarisation
 from resdep._fitting import Fitter
-from resdep._archiver import check_recent_beam_injection
+from resdep._archiver import (
+        check_recent_beam_injection, check_recent_wiggler_ramp
+)
 
 class BeamMode(IntEnum):
     SHUT_DOWN = 1
@@ -531,6 +533,21 @@ class MainWindow(QWidget):
         """
         self._enable_abort_button(enable=False)
         return None
+    #--------------------------------------------------------------------------
+    def _enable_control_panel(self, enable: bool = True) -> None:
+        self.button_manual_normal_scan.setEnabled(enable)
+        self.button_manual_wide_search.setEnabled(enable)
+        # if you run a manual scan, the automatic button will be disabled.
+        # but this function will always enable/re-enable it if enable==True
+        if not self._automatic_scan_enabled and enable == False:
+            self.button_automatic.setEnabled(enable)
+        self.checkbox_machine_studies.setEnabled(enable)
+        self.checkbox_machine_state_override.setEnabled(enable)
+        return None
+    def _disable_control_panel(self) -> None:
+    #--------------------------------------------------------------------------
+        self._enable_control_panel(enable=False)
+        return None
     # *--------------------------------* #
     # *---------- Experiment ----------* #
     # *--------------------------------* #
@@ -550,10 +567,7 @@ class MainWindow(QWidget):
         self._abort_requested: bool = False
         # enable / disable buttons
         self._enable_abort_button()
-        self.button_manual_normal_scan.setEnabled(False)
-        self.button_manual_wide_search.setEnabled(False)
-        if not self._automatic_scan_enabled:
-            self.button_automatic.setEnabled(False)
+        self._disable_control_panel()
         # update status bar
         self.on_status_update("Starting up...")
 
@@ -609,13 +623,9 @@ class MainWindow(QWidget):
 
         # reset state
         self._running_experiment: bool = False
-        # disable abort button
-        self._disable_abort_button()
 
-        # re-enable appropriate buttons
-        self.button_manual_normal_scan.setEnabled(True)
-        self.button_manual_wide_search.setEnabled(True)
-        self.button_automatic.setEnabled(True)
+        self._disable_abort_button()
+        self._enable_control_panel()
 
         # make sure progress bar reads 100%
         self.progress_bar.setMaximum(100)
@@ -746,14 +756,15 @@ class MainWindow(QWidget):
     def _check_able_to_run(
         self, 
         scan_type: ScanType
-        ) -> tuple[bool, str]:
+        ) -> tuple[bool, Optional[str]]:
         """
         Check if the experiment can run based on the state of the machine.
 
         Parameters
         ----------
-        scan_type: Literal["automatic", "manual"]
-            Automatic scans require the beam mode: "User Beam", while manual scans do not.
+        scan_type: ScanType (enum)
+            Automatic scans require the beam mode: "User Beam", 
+            while manual scans do not.
 
         Returnm
         -------
@@ -773,7 +784,7 @@ class MainWindow(QWidget):
         3. Must be in "User Beam" if automatic scans are enabled
         """                 
         verdict: bool = False
-        error: str = "No error"
+        error: Optional[str] = None
 
         self.error_label.setText("")
         formatted_beam_modes: str = ""
@@ -788,7 +799,7 @@ class MainWindow(QWidget):
 
         # If not connected/disconnected:
         # give PVs a chance to reconnect before state check logic
-        for pv in [self.beam_mode_PV, self.current_PV]:
+        for pv in self.machine_state_PVs.values():
             if not pv.connected:
                 pv.connect(timeout=1)
                 time.sleep(1)
@@ -797,7 +808,6 @@ class MainWindow(QWidget):
                 error = (
                     f"{pv} refused to connect. Cannot determine machine state."
                 )
-                self.logger.warning(error)
                 return False, error
 
         beam_mode_response: Union[int, None] = (
@@ -816,7 +826,6 @@ class MainWindow(QWidget):
                 + formatted_beam_modes
                 + "Aborting request to run resdep."
             )
-            self.logger.warning(error)
             return False, error
 
         if current is None:
@@ -824,8 +833,16 @@ class MainWindow(QWidget):
                 "Current PV (DCCT) returned None.\n" 
                 + "Aborting request to run resdep."
             )
-            self.logger.warning(error)
             return False, error
+
+        recent_wiggler_ramp: bool = check_recent_wiggler_ramp()
+        if recent_wiggler_ramp:
+            error = (
+                    "Wiggler ramp initiated in the 40 minutes. "
+                    +"Require more time to repolarise / stabilise."
+            )
+            verdict = False
+            return verdict, error
 
         # Assume can run, else check for errors
         is_user_beam: bool = any([
@@ -842,8 +859,19 @@ class MainWindow(QWidget):
         elif scan_type == ScanType.NORMAL or scan_type == ScanType.WIDE:
             scan_type_allowed: bool = True # manual scans can run anytime
 
-        recent_beam_injection = check_recent_beam_injection()
 
+        try:
+            recent_beam_injection: bool = check_recent_beam_injection()
+        except Exception:
+            self.logger.error(traceback.format_exc())
+            error = (
+                    "Unable to check if there was a recent beam injection. "
+                    +"This is probably due to an issue with the archiver. "
+                    +"Check the GUI log (/asp/usr/data/resdep/GUI_log) "
+                    +"for more info."
+            )
+            verdict = False
+            return verdict, error
 
         if all(
                 [
@@ -862,21 +890,18 @@ class MainWindow(QWidget):
                 + f"{current:0.0f} mA is not enough resolution for measurement. " 
                 + "Aborting request to run resdep."
             )
-            self.logger.warning(error)
             return False, error
         elif self.polarisation < 95:  # %
             error = (
                 "Beam polarisation is less than 95%; not enough resolution. "
                 + "Aborting request to run resdep."
             )
-            self.logger.warning(error)
             return False, error
         elif recent_beam_injection:
             error = (
                 "Beam has been injected too recently and has not have enough " 
                 + "time to polarise (requires at least 39 minutes)."
             )
-            self.logger.warning(error)
             return False, error
         elif all([
                 scan_type == ScanType.AUTOMATIC,
@@ -887,7 +912,6 @@ class MainWindow(QWidget):
                      + f"{beam_mode.name}. " 
                      + "Expected any form of 'User Beam'. " 
                      + "Aborting request to run resdep.")
-            self.logger.warning(error)
             return False, error
 
         return verdict, error
@@ -898,17 +922,20 @@ class MainWindow(QWidget):
         self,
     ) -> None:
         """
-        Automatically runs resdep every hour+  using countdown timer.
+        Automatically runs resdep every hour+ using countdown timer.
         """
         able_to_run, error = self._check_able_to_run(
                 scan_type=ScanType.AUTOMATIC
         )
+        self.logger.debug(f"Automatic scan able to run = {able_to_run}")
 
         if able_to_run:
             self._apply_default_scan_settings()
             self.run_experiment()
         else:
-            self.error_label.setText(error)
+            if error is not None:
+                self.logger.error(error)
+                self.error_label.setText(error)
             self._start_automatic_scan_countdown()
 
         return None
@@ -929,6 +956,7 @@ class MainWindow(QWidget):
             self._apply_default_scan_settings()
             self.run_experiment()
         else:
+            self.logger.error(error)
             QMessageBox.critical(self, "Error", f"{error}")
 
         return None
@@ -971,6 +999,7 @@ class MainWindow(QWidget):
                 self.close()
 
         else:
+            self.logger.error(error)
             QMessageBox.critical(self, "Error", f"{error}")
 
         return None
@@ -1120,6 +1149,22 @@ class MainWindow(QWidget):
         self.current_PV: epics.pv.PV = epics.pv.get_pv(
             "SR11BCM01:CURRENT_MONITOR", connect=True, timeout=1
         )
+        self.bioSAXS_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+                "SR02SCU01:RAMP_STATUS", connect=True, timeout=1
+        )
+        self.IMBL_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+                "SR08SCW01:FIELD_RAMPING_STATUS", connect=True, timeout=1
+        )
+        self.ADS_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+                "SR10SCW01:RAMP_STATUS", connect=True, timeout=1
+        )
+        self.machine_state_PVs: dict[str, epics.pv.PV] = {
+            "beam_mode": self.beam_mode_PV,
+            "current": self.current_PV,
+            "bioSAXS_ramp_status": self.bioSAXS_ramp_status_PV,
+            "IMBL_ramp_status": self.IMBL_ramp_status_PV,
+            "ADS_ramp_status": self.ADS_ramp_status_PV,
+        }
     # *--------------------------------* #
     # *----------- QT Config ----------* #
     # *--------------------------------* #
