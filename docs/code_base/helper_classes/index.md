@@ -1,3 +1,8 @@
+## [Experiment Handlers](_experiment_handlers.md)
+Extensible experiment handler "middle men" communicating between the signals 
+(data, state, commands) from the experiment to the slots (interactivity) in 
+the GUI. 
+
 ## [Fitting](_fitting.md)
 Functions for fitting curves to resonant depolarisation data.
 

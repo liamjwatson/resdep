@@ -29,7 +29,7 @@ Can also be instanced and run natively in command line.
 
 import itertools
 from dataclasses import dataclass, field
-from enum import IntEnum
+from enum import Enum, IntEnum
 import platform
 import builtins
 from typing import Union, Callable, Optional, Literal
@@ -52,6 +52,11 @@ from resdep._plotting import Plotter, StandaloneGraph
 from resdep._fitting import Fitter
 import resdep._constants as const
 from resdep._progressBars import printProgressBar
+
+class ScanType(Enum):
+    AUTOMATIC = 0
+    NORMAL = 1
+    WIDE = 2
 
 class SweepDirection(IntEnum):
     """

@@ -50,13 +50,15 @@ from PySide6.QtCore import (
     QThreadPool,
     QObject,
     Signal,
+    Slot,
     QTimer,
     QCoreApplication,
 )
 
 # resdep
+from resdep.experiment import ScanType
 from resdep._experiment_handlers import (
-        ExperimentHandler, 
+        ExperimentHandlerContract,
         ExperimentHandlerFactory,
         ExperimentGuiBinder,
         HostType
@@ -71,10 +73,6 @@ class BeamMode(IntEnum):
     USER_BEAM_TOP_UP = 9
     USER_BEAM_EXOTIC = 10
 
-class ScanType(Enum):
-    AUTOMATIC = 0
-    NORMAL = 1
-    WIDE = 2
 
 class MainWindow(QWidget):
     """
@@ -104,9 +102,13 @@ class MainWindow(QWidget):
 
     """                         
 
-    def __init__(self, experiment_handler: ExperimentHandler, *args, **kwargs):
+    def __init__(
+            self, 
+            experiment_handler: ExperimentHandlerContract, 
+            *args, 
+            **kwargs
+            ) -> None:
         super().__init__(*args, **kwargs)
-
 
         QCoreApplication.setOrganizationName("Physics")
         QCoreApplication.setApplicationName("Resonant Depolarisation (simple)")
@@ -189,7 +191,6 @@ class MainWindow(QWidget):
 
         #----------------------------------------------------------- status bar
         self.progress_bar = QProgressBar(self)
-        self.progress_bar.setMaximum(self.resdep.sweep_steps)
 
         # status bar -------------------------------- #
         self.status_bar = QStatusBar()
@@ -510,16 +511,13 @@ class MainWindow(QWidget):
         # update status bar
         self._on_status_update("Starting up...")
 
-        # update progress bar
-        self.resdep._calculate_range()
-        self.progress_bar.setMaximum(self.resdep.sweep_steps)
-
         # call resdep
         self._running_experiment: bool = True
         self.thread_manager.start(self.experiment_handler.run)
 
         return None
     #--------------------------------------------------------------------------
+    @Slot(int, int)
     def _on_progress_update(self, step: int, max_steps: int) -> None:
         """
         Simply update the value of the progress bar.
@@ -530,6 +528,7 @@ class MainWindow(QWidget):
 
         return None
     #--------------------------------------------------------------------------
+    @Slot(str)
     def _on_status_update(self, message: str) -> None:
         """
         Updates the GUI statues 
@@ -538,6 +537,7 @@ class MainWindow(QWidget):
         self.status_bar.showMessage(f"Status: {message}")
         return None
     #--------------------------------------------------------------------------
+    @Slot(Path)
     def _on_data_path_update(self, data_path: Path) -> None:
         """
         Assign data path from resdep to GUI button.
@@ -547,6 +547,7 @@ class MainWindow(QWidget):
 
         return None
     #--------------------------------------------------------------------------
+    @Slot(str, str)
     def _on_results(
             self, 
             formatted_beam_energy: str, 
@@ -559,6 +560,7 @@ class MainWindow(QWidget):
         self.beam_energy_label.setText(formatted_beam_energy)
         return None
     #--------------------------------------------------------------------------
+    @Slot()
     def _on_finish(
         self,
     ) -> None:
@@ -675,8 +677,9 @@ class MainWindow(QWidget):
 
         Parameters
         ----------
-        scan_type: Literal["automatic", "manual"]
-            Automatic scans require the beam mode: "User Beam", while manual scans do not.
+        scan_type: ScanType (enum)
+            Automatic scans require the beam mode: "User Beam", 
+            while manual scans do not.
 
         Returnm
         -------
@@ -828,7 +831,7 @@ class MainWindow(QWidget):
         )
 
         if able_to_run:
-            self._apply_default_scan_settings()
+            self.experiment_handler.apply_scan_settings(ScanType.AUTOMATIC)
             self.run_experiment()
         else:
             self.error_label.setText(error)
@@ -849,7 +852,7 @@ class MainWindow(QWidget):
         )
 
         if able_to_run:
-            self._apply_default_scan_settings()
+            self.experiment_handler.apply_scan_settings(ScanType.NORMAL)
             self.run_experiment()
         else:
             QMessageBox.critical(self, "Error", f"{error}")
@@ -887,8 +890,7 @@ class MainWindow(QWidget):
             # if yes
             if answer == QMessageBox.StandardButton.Yes:
                 self.close()
-                self.resdep.bounds = 0.35 / 100  # 2 hour scan
-                self.resdep.sweep_rate = 10  # Hz/s
+                self.experiment_handler.apply_scan_settings(ScanType.WIDE)
                 self.run_experiment()
             else:
                 self.close()
@@ -897,16 +899,6 @@ class MainWindow(QWidget):
             QMessageBox.critical(self, "Error", f"{error}")
 
         return None
-    #--------------------------------------------------------------------------
-    def _apply_default_scan_settings(
-        self,
-    ) -> None:
-        """
-        Default resdep scan settings for normal and automatic
-        """
-        self.resdep.bounds = 0.05 / 100  # input %, output decimal
-        self.resdep.sweep_rate = 5  # Hz/s
-
     # *--------------------------------* #
     # *------ Button Callbacks --------* #
     # *--------------------------------* #
@@ -925,7 +917,6 @@ class MainWindow(QWidget):
             )
             self._on_status_update("Waiting for next automatic scan...")
             self._automatic_scan_enabled = True
-            self._apply_default_scan_settings()
             self.automatic_scan()
 
         else:  # if unchecked (i.e. clicked to diable automatic scans)
@@ -1068,7 +1059,7 @@ class MainWindow(QWidget):
 
 # run the app
 if __name__ == "__main__":
-    experiment_handler: ExperimentHandler = (
+    experiment_handler: ExperimentHandlerContract = (
             ExperimentHandlerFactory.create_handler(host_type=HostType.LOCAL)
     )
     app = QApplication(sys.argv)

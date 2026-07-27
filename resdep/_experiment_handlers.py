@@ -8,20 +8,25 @@ And of course, should be able to run() and abort().
 
 Type of handler that is passed to GUI is handled by Factory.
 Decision should be environment based. e.g. 
-if __name__ == "__main__":
-    host_type="local"
-or something a little more elegant.
-"""             
 
-from typing import Literal, Protocol, runtime_checkable
+```py title="simpleGUI.py"
+if __name__ == "__main__":
+    host_type = HostType.LOCAL
+```
+
+or something a little more elegant.
+"""                             
+from typing import Literal, Protocol, runtime_checkable, TYPE_CHECKING
 from enum import Enum
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, SignalInstance
 
-from resdep.experiment import ResonantDepolarisation
-from resdep import simpleGUI
+from resdep.experiment import ResonantDepolarisation, ScanType
+
+if TYPE_CHECKING:
+    from resdep import simpleGUI
 
 class HostType(Enum):
     LOCAL = "local"
@@ -43,33 +48,47 @@ class SupportsStartTimerSignal(Protocol):
 class SupportsADCWindowsSignal(Protocol):
     ADC_windows: SignalInstance  # ADC windows, depolarised bunches
 
-class ExperimentHandler(ABC, QObject):
+@runtime_checkable
+class ExperimentHandlerContract(Protocol):
+    progress: SignalInstance  # current step, max steps
+    results: SignalInstance # formatted_beam_energy (results), error
+    finished: SignalInstance 
+
+    def run(self):...
+
+    def abort(self):...
+
+    def apply_scan_settings(self, scan_type: ScanType):...
+
+    def emit_progress(self, step: int, max_steps: int):...
+        
+    def emit_results(self, formatted_beam_energy: str, error: str):...
+
+class ExperimentHandler(QObject):
     """
-    Experiment handler iterface. 
+    Experiment handler base class. 
     Contains particular attributes and callbacks for GUI functionality.
+    Can't use ABC here due to metaclass conflicts between ABC and QObject.
+    See ExperimentHandlerContract (protocol) instead.
     """
     progress = Signal(int, int)  # current step, max steps
     results = Signal(str, str) # formatted_beam_energy (results), error
     finished = Signal() 
 
-    def __init__(self) -> None:
-        pass
-
-    @abstractmethod
     def run(self):...
 
-    @abstractmethod
     def abort(self):...
 
-    @abstractmethod
+    def apply_scan_settings(self, scan_type: ScanType):...
+
     def emit_progress(self, step: int, max_steps: int):...
         
-    @abstractmethod
     def emit_results(self, formatted_beam_energy: str, error: str):...
 
 class LocalQtDecorator(ExperimentHandler):
     """
-    Qt wrapper for resonant depolarisation.
+    Qt wrapper for resonant depolarisation, intended to be a threaded process, 
+    using QtThreadPool().
     Defines emitted signals and attaches them to the worker.
     The worker must contain these callbacks to emit signals.
     """
@@ -80,20 +99,30 @@ class LocalQtDecorator(ExperimentHandler):
     ADC_windows = Signal(list, str)  # ADC windows, depolarised bunches
     #--------------------------------------------------------------------------
     def __init__(self) -> None:
+        """
+        Create instance of
+        [`ResonantDepolarisation`][resdep.experiment.ResonantDepolarisation].
+        Inject callbacks (Signal emitters) into ResonantDepolarisation's 
+        constructor.
+        """
         super().__init__()
-        self.worker = ResonantDepolarisation()
-        self.worker.progress_callback = self.emit_progress
-        self.worker.status_callback = self.emit_status
-        self.worker.data_path_callback = self.emit_data_path
-        self.worker.results_callback = self.emit_results
+        self.resdep = ResonantDepolarisation()
+        self.resdep.progress_callback = self.emit_progress
+        self.resdep.status_callback = self.emit_status
+        self.resdep.data_path_callback = self.emit_data_path
+        self.resdep.results_callback = self.emit_results
 
         return None
     #--------------------------------------------------------------------------
     def run(
         self,
     ) -> None:
+        """
+        Start experiment, and emit finished on end.
+        This should already be threaded in the GUI.
+        """
         try:
-            self.worker.start_experiment()
+            self.resdep.start_experiment()
         finally:
             self.finished.emit()
         return None
@@ -101,8 +130,32 @@ class LocalQtDecorator(ExperimentHandler):
     def abort(
         self,
     ) -> None:
-        self.worker.request_abort()
+        """
+        Request an abort. This will flip a state in ResonantDepolarsation and 
+        will raise an exception in the experiment loop on the next check.
+        """
+        self.resdep.request_abort()
         return None
+    #--------------------------------------------------------------------------
+    def apply_scan_settings(self, scan_type: ScanType) -> None:
+        """
+        Configure the initial settings based on the passed scan type.
+
+        Parameters
+        ----------
+        scan_type: ScanType (enum)
+            One of `ScanType.AUTOMATIC`, `.NORMAL`, or `.WIDE`.
+        """
+        if scan_type == ScanType.AUTOMATIC or scan_type == ScanType.NORMAL:
+            self.resdep.bounds = 0.05 / 100  # input %, output decimal
+            self.resdep.sweep_rate = 5  # Hz/s
+        elif scan_type == ScanType.WIDE:
+            self.resdep.bounds = 0.35 / 100  # 2 hour scan
+            self.resdep.sweep_rate = 10  # Hz/s
+        else:
+            raise ValueError(
+                    f"scan_type should be one of {ScanType.__members__}"
+            )
     #--------------------------------------------------------------------------
     def emit_progress(self, step: int, max_steps: int) -> None:
         self.progress.emit(step, max_steps)
@@ -145,7 +198,7 @@ class LocalQtDecorator(ExperimentHandler):
 
 class IOCInterface(ExperimentHandler):
     """
-    Communication interface between Qt GUI and IOC running resdep
+    Communication interface between Qt GUI and IOC running resdep. TBC!
     """
 
     def __init__(self) -> None:
@@ -176,6 +229,11 @@ class IOCInterface(ExperimentHandler):
         # something like, send_cmd("abort")
         pass
 
+    def apply_scan_settings(self, scan_type: ScanType) -> None:
+        # something like resdep_scan_type_PV.put(ScanType.NORMAL.value)
+        # then there is a listener in experiment.py
+        pass
+
     def emit_progress(self, step: int, max_steps: int) -> None:
         # something like
         # progress = some_pv_defined_in_init.get()
@@ -192,13 +250,32 @@ class IOCInterface(ExperimentHandler):
 
 
 class ExperimentHandlerFactory():
+    """
+    Factory that returns a particular concrete subclass of ExperimentHandler.
+    This should be decided based on environment or environment variable.
+    
+    Example
+    -------
+
+    ```py title="simpleGUI.py"
+    if __name__ == "__main__":
+        experiment_handler: ExperimentHandlerContract = (
+            ExperimentHandlerFactory.create_handler(
+                host_type=HostType.LOCAL
+            )
+        )
+        app = QApplication(sys.argv)
+        gui = MainWindow(experiment_handler)
+        ExperimentGuiBinder.bind(experiment_handler, gui)
+    ```
+    """             
     handler_types: dict[HostType, ExperimentHandler] = {
             HostType.LOCAL: LocalQtDecorator(),
             HostType.REMOTE: IOCInterface(),
     }
 
     @staticmethod
-    def create_handler(host_type: HostType):
+    def create_handler(host_type: HostType) -> ExperimentHandlerContract:
         handler = ExperimentHandlerFactory.handler_types.get(host_type)
         if handler is None:
             raise ValueError(
@@ -208,60 +285,69 @@ class ExperimentHandlerFactory():
         return handler
     
 class ExperimentGuiBinder():
+    """
+    Binds Signals in ExperimentHandler to Slots in GUI.
+    Optionally, bind additional signals defined in concrete subclasses of 
+    ExperimentHandler.
+    See [`bind`][resdep._experiment_handlers.ExperimentGuiBinder.bind] on
+    how to add additional signals.
+    """ 
     @staticmethod
     def bind(
-        handler: ExperimentHandler,
+        handler: ExperimentHandlerContract,
         gui: "simpleGUI.MainWindow"
     ) -> None:
         """ 
-        Binds additional singals in concrete ExperimentHandler subclass 
-        implementations to appropriately configured Slots in the GUI.
+        Binds default and additional Signals in concrete ExperimentHandler 
+        subclass implementations to appropriately configured Slots in the GUI.
         Binding only occurs if the slot exists, the ExperimentHandler 
         satisfies a specific protocol (contract), and there is an appropriate 
         Slot in the GUI.
 
-        1. Steps to add a new Signal (e.g. colour):
+        Steps to add a new Signal (e.g. colour):
 
-            ```py title=_experiment_handlers.py
-                class ColourfulExperimentHandler(ExperimentHandler):
-                    colour = Signal(str) # <------------------------ New signal
-                    def __init__(self):
-                    ...
-                    def get_experiment_colour():
-                        # logic
-                        experiment_colour: str = ...
-                        # send colour to GUI
-                        self.colour.emit(experiment_colour)# <- emit new signal
+        1. Add signal to handler, make sure it's emitted appropriately.
+
+            ```py title="_experiment_handlers.py"
+            class ColourfulExperimentHandler(ExperimentHandler):
+                colour = Signal(str) # <------------------------ New signal
+                def __init__(self):
+                ...
+                def get_experiment_colour():
+                    # logic
+                    experiment_colour: str = ...
+                    # send colour to GUI
+                    self.colour.emit(experiment_colour) # <- emit new signal
             ```
 
         2. Define new protocol (contract):
 
-            ```py title=_experiment_handlers.py
-                class SupportsColorSignal(Protocol):
-                    colour: SignalInstance
+            ```py title="_experiment_handlers.py"
+            class SupportsColorSignal(Protocol):
+                colour: SignalInstance
             ```
 
         3. Define Slot in GUI that recieves new Signal
 
-            ```py title=simpleGUI.py
-                class MainWindow(QWidget):
-                    ...
-                    @Slot
-                    def _on_color(color: str):
-                        # update the GUI, for example:
-                        self.color_label.setText(color)
+            ```py title="simpleGUI.py"
+            class MainWindow(QWidget):
+                ...
+                @Slot(str)
+                def _on_color(color: str):
+                    # update the GUI, for example:
+                    self.color_label.setText(color)
             ```
 
         4. Configure ExperimentGuiBinder (this class) to bind Signal to Slot:
 
-            ```py title=_experiment_handlers.py
-                class ExperimentGuiBinder():
-                    ...
-                    # check handler against Protocol (contract)
-                    if isinstance(handler, SupportsColorSignal):
-                        handler.color.connect(
-                            gui._on_color
-                        )
+            ```py title="_experiment_handlers.py"
+            class ExperimentGuiBinder():
+                ...
+                # check handler against Protocol (contract)
+                if isinstance(handler, SupportsColorSignal):
+                    handler.color.connect(
+                        gui._on_color
+                    )
             ```
 
         """                                             

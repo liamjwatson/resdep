@@ -108,6 +108,7 @@ nav:
       - resdepGUI (Machine studies): code_base/GUIs/resdepGUI.md
     - Helper classes: 
       - code_base/helper_classes/index.md
+      - Experiment handlers: code_base/helper_classes/_experiment_handlers.md
       - Fitting: code_base/helper_classes/_fitting.md
       - Plotting: code_base/helper_classes/_plotting.md
       - Calculations: code_base/helper_classes/_calculations.md

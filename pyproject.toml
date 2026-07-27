@@ -32,3 +32,9 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "resdep"
 module-root = "."
+
+[tool.pytest]
+testpaths = [
+	"tests"
+]
+pythonpath = ["."]
