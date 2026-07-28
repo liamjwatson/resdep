@@ -52,6 +52,7 @@ from resdep._plotting import Plotter, StandaloneGraph
 from resdep._fitting import Fitter
 import resdep._constants as const
 from resdep._progressBars import printProgressBar
+from resdep._archiver import bioSAXSRampStatus, IMBLRampStatus, ADSRampStatus
 
 class ScanType(Enum):
     AUTOMATIC = 0
@@ -446,7 +447,9 @@ class ResonantDepolarisation:
         self.sweep_period_PV.put(
             self.set_sweep_period, use_complete=True
         )  # us
-        self.pattern_PV.put(self.set_drive_pattern, use_complete=True) # str
+        self.pattern_PV.put(
+                self.set_drive_pattern, use_complete=True
+        ) # str
         while not all(
             [
                 self.sweep_freq_PV.put_complete,
@@ -464,11 +467,14 @@ class ResonantDepolarisation:
             self._log_data()
             if self._abort_requested:
                 self.status_callback("Experiment interrupted!")
-                raise InterruptedError
+                raise InterruptedError(
+                        "Experiement aborted during baseline data acquisition."
+                )
 
             time.sleep(1/self.log_frequency)
 
         self.logger.info("Baseline data acquired.")
+
 
         return None
     # -------------------------------------------------------------------------
@@ -549,7 +555,9 @@ class ResonantDepolarisation:
 
             if self._abort_requested:
                 self.status_callback("Experiment aborted!")
-                raise InterruptedError
+                raise InterruptedError(
+                        "Experiment aborted during depolarisation scan."
+                )
 
             time.sleep(0.01)
 
@@ -776,6 +784,24 @@ class ResonantDepolarisation:
         for wiggler, pv in wiggler_PVs.items():
             if pv.connected and pv.value is not None:
                 self.wiggler_fields[wiggler] = pv.value
+        # wiggler ramp status
+        self.bioSAXS_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+                "SR02SCU01:RAMP_STATUS", connect=True, timeout=1
+        )
+        self.IMBL_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+                "SR08SCW01:FIELD_RAMPING_STATUS", connect=True, timeout=1
+        )
+        self.ADS_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+                "SR10SCW01:RAMP_STATUS", connect=True, timeout=1
+        )
+        self.wiggler_ramp_staus_PVs: dict[str, epics.pv.PV] = {
+                "bioSAXS": self.bioSAXS_ramp_status_PV,
+                "IMBL": self.IMBL_ramp_status_PV,
+                "ADS": self.ADS_ramp_status_PV
+        }
+        for pv in self.wiggler_ramp_staus_PVs.values():
+            pv.add_callback(self._on_wiggler_ramp)
+
 
         # --- SR/LCW/RF temperatures
         # initialise PV dicts
@@ -1188,7 +1214,7 @@ class ResonantDepolarisation:
             self.f_rev: float = 1e-3 * masterRF_PV.value / 360  # kHz
 
         return None
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     def calculate_adc_counter_windows(self, sector: int = 1) -> None:
         """Calculates the offsets and window lengths of the two counter windows 
         for a specific sector.
@@ -1660,6 +1686,61 @@ class ResonantDepolarisation:
 
         except Exception:
             self.logger.error(traceback.format_exc())
+
+        return None
+    # -------------------------------------------------------------------------
+    def _on_wiggler_ramp(self, pvname=None, value=None, host=None, **kws) -> None:
+        """
+        PV callback that listens for any of the wiggler (bioSAXS, IMBL, ADS) 
+        ramp status change. If so, something is ramping, and the diagnostic 
+        should abort.
+        """
+        _is_wiggler_ramping: bool = False
+
+        if value is None:
+            self.logger.warning(
+                    f"Wiggler {pvname} ramp status returned None. " 
+                    +"Cannot determine ramp state."
+            )
+            return None
+
+        pv_names: dict[str, str] = {
+                "bioSAXS": "SR02SCU01:RAMP_STATUS",
+                "IMBL": "SR08SCW01:FIELD_RAMPING_STATUS",
+                "ADS": "SR10SCW01:RAMP_STATUS"
+        }
+
+        if pvname not in pv_names.values():
+            self.logger.warning(
+                f"Wiggler ramp callback connected to {pvname}, but "
+                +"is not configured. See _on_wiggler_ramp definition in "
+                +"experiment.py."
+            )
+            return None
+
+        if pvname == pv_names["bioSAXS"]:
+            status = bioSAXSRampStatus(int(value))
+            if status == bioSAXSRampStatus.RAMPING:
+                _is_wiggler_ramping = True
+
+        elif pvname == pv_names["IMBL"]:
+            status = IMBLRampStatus(int(value))
+            if any([
+                    status == IMBLRampStatus.RAMP_SYNC,
+                    status == IMBLRampStatus.RAMP_TO_SYNC
+                ]):
+                _is_wiggler_ramping = True
+
+        elif pvname == pv_names["ADS"]:
+            status = ADSRampStatus(int(value))
+            if status == ADSRampStatus.RAMPING:
+                _is_wiggler_ramping = True
+
+        if _is_wiggler_ramping:
+            self.logger.critical(
+                "Detected the ramping of a wiggler field. Aborting scan." 
+            )
+            self.request_abort()
 
         return None
     # *--------------------------------* #
