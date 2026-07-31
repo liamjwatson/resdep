@@ -63,7 +63,6 @@ from resdep._experiment_handlers import (
         ExperimentGuiBinder,
         HostType
 )
-from resdep._archiver import check_recent_beam_injection
 from resdep.experiment import ProcessedData, ResonantDepolarisation
 from resdep._fitting import Fitter
 from resdep._archiver import (
@@ -567,6 +566,8 @@ class MainWindow(QWidget):
     @Slot(str, str)
     def _on_results(
             self, 
+            E0_mean_sigfig: Optional[float],
+            E0_stddev_sigfig: Optional[float], 
             formatted_beam_energy: str, 
             error: Optional[str]
         ) -> None:

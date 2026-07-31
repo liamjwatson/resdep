@@ -555,12 +555,13 @@ class Fitter:
 
         Returns
         -------
-        E0_mean: float
-            Fitted beam energy (statistical average)
-        
         E0_mean_sigfig: float
             Fitted beam energy quoted to the number of 
             significant figures in the error.
+
+        E0_mean_sigfig: float
+            Mean energy quoted to the number of significant figures as the 
+            standard deviation allows.
 
         formatted_beam_energying: str
             Formatted beam energy string of the form:
@@ -599,13 +600,22 @@ class Fitter:
                     "Is everything okay with the machine?"
                 )
 
-            E0_mean, _, E0_mean_sigfig, _, formatted_beam_energy = (
-                self.calculate_fitted_energy_stats()
-            )
+            (   
+                *_, 
+                E0_mean_sigfig, 
+                E0_stddev_sigfig, 
+                formatted_beam_energy
+             ) = self.calculate_fitted_energy_stats()
+            
 
             logging.info(f"Mean beam energy = {formatted_beam_energy}")
 
-            return E0_mean, E0_mean_sigfig, formatted_beam_energy, error
+            return (
+                E0_mean_sigfig, 
+                E0_stddev_sigfig, 
+                formatted_beam_energy, 
+                error
+            )
 
 if __name__ == "__main__":
     print(

@@ -55,9 +55,10 @@ from resdep._progressBars import printProgressBar
 from resdep._archiver import bioSAXSRampStatus, IMBLRampStatus, ADSRampStatus
 
 class ScanType(Enum):
-    AUTOMATIC = 0
-    NORMAL = 1
-    WIDE = 2
+    NONE = 0
+    AUTOMATIC = 1
+    NORMAL = 2
+    WIDE = 3
 
 class SweepDirection(IntEnum):
     """
@@ -141,7 +142,7 @@ class ResonantDepolarisation:
     def __init__(
         self,
         progress_callback: Optional[Callable] = None,
-        _plot_callback: Optional[Callable] = None,
+        plot_callback: Optional[Callable] = None,
         status_callback: Optional[Callable] = None,
         data_path_callback: Optional[Callable] = None,
         timer_callback: Optional[Callable] = None,
@@ -160,7 +161,7 @@ class ResonantDepolarisation:
             [`resdepGUI`][resdep.resdepGUI.MainWindow.on_progress_update] 
             or
             [`simpleGUI`][resdep.simpleGUI.MainWindow.on_progress_update]
-        _plot_callback:
+        plot_callback:
             Live plotting data (
             `freqs`, `beam_loss_window_1`, `beam_loss_window_2`
             )
@@ -206,7 +207,7 @@ class ResonantDepolarisation:
         self._config_logger()
 
         self.progress_callback = progress_callback
-        self._plot_callback = _plot_callback
+        self.plot_callback = plot_callback
         if status_callback is not None:
             self.status_callback = status_callback
         else:
@@ -400,7 +401,7 @@ class ResonantDepolarisation:
             self.blm.restore_inits(mode="adc_counter_masks")
             self.blm.restore_inits(mode="decimation")
 
-            if self._plot_callback is None:
+            if self.plot_callback is None:
                 self.logger.info(
                     "To manually plot data from the terminal, "
                      + "run class method `plot_data()`, "
@@ -409,7 +410,12 @@ class ResonantDepolarisation:
 
             if not self._abort_requested and self._has_stored_data:
                 self.status_callback("Analysing data...")
-                formatted_beam_energy, error = self._post_processing()
+                (
+                    E0_mean_sigfig, 
+                    E0_stddev_sigfig, 
+                    formatted_beam_energy, 
+                    error
+                ) = self._post_processing()
 
                 if error is not None:
                     self.logger.error(error)
@@ -529,8 +535,8 @@ class ResonantDepolarisation:
                         total=self.sweep_steps,
                         decimals=2,
                     )
-                if self._plot_callback is not None:
-                    self._plot_callback(
+                if self.plot_callback is not None:
+                    self.plot_callback(
                         self.freqs,
                         self.beam_loss_window_1,
                         self.beam_loss_window_2,
@@ -565,21 +571,29 @@ class ResonantDepolarisation:
 
         return None
     # -------------------------------------------------------------------------
-    def _post_processing(self) -> tuple[str, Optional[str]]:
+    def _post_processing(self) -> tuple[
+            Optional[float], Optional[float], Optional[str], Optional[str]]:
         """
         Post processing data analysis pipeline.
         Create ProcessedData object, calculate ratio_loss().
         Perform fit, calculate stats, return formatted result.
         """
-        error = None
-        formatted_beam_energy = ""
+        E0_mean_sigfig: Optional[float] = None
+        E0_stddev_sigfig: Optional[float] = None
+        formatted_beam_energy: Optional[str] = None
+        error: Optional[str] = None
 
         try:  
             processed_data = ProcessedData(resdep=self)
             fitter = Fitter(processed_data, self)
             processed_data.calculate_ratio_loss()
 
-            *_, formatted_beam_energy, error = fitter.automagic_fit()
+            (
+                E0_mean_sigfig, 
+                E0_stddev_sigfig, 
+                formatted_beam_energy, 
+                error
+            ) = fitter.automagic_fit()
             
             processed_data.save_data()
 
@@ -592,16 +606,30 @@ class ResonantDepolarisation:
             # update GUI
             if error is not None:
                 formatted_beam_energy = "Error with fit."
-                return formatted_beam_energy, error
+                return (
+                    E0_mean_sigfig, 
+                    E0_stddev_sigfig, 
+                    formatted_beam_energy, 
+                    error
+                )
 
-            with open(self.data_path / "beam_energy.txt", "w") as f:
-                f.write(formatted_beam_energy)
-            if (self.data_path / "beam_energy.txt").exists():
-                logging.debug("beam energy txt file saved successfully.")
-            else:
-                logging.debug("beam energy txt file not saved.")
 
-        return formatted_beam_energy, error
+            if formatted_beam_energy is not None:
+                with open(self.data_path / "beam_energy.txt", "w") as f:
+                    f.write(formatted_beam_energy)
+                if (self.data_path / "beam_energy.txt").exists():
+                    logging.debug(
+                            "beam energy txt file saved successfully."
+                    )
+                else:
+                    logging.debug("beam energy txt file not saved.")
+
+        return (
+                E0_mean_sigfig, 
+                E0_stddev_sigfig, 
+                formatted_beam_energy, 
+                error
+            )
     # -------------------------------------------------------------------------
     def _calculate_range(
         self,

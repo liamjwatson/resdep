@@ -39,6 +39,13 @@ class CountingMode(IntEnum):
     DIFFERENTIAL = 0
     NORMAL = 1
 
+class BoxStatus(IntEnum):
+    UNKNOWN = 0
+    OK = 1
+    NO_REPLY = 2 
+    INVALID = 3
+    TIMEOUT = 4 
+
 class DefaultT2TriggerDelays(IntEnum):
     """
     Default values of the post-mortem (T2) triggers.
@@ -142,7 +149,7 @@ class BLMs:
             )
             box_status = box_status_monitor_PV.get(timeout=0.1)
             time.sleep(self._WAIT_TIME)
-            if box_status == 1:  # <-- Ok
+            if box_status == BoxStatus.OK:  # <-- Ok
                 self.sectors_connected.append(sector)
             else:
                 self.sectors_OOS.append(sector)

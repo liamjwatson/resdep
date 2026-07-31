@@ -55,7 +55,7 @@ def test_handler_applies_scan_settings(
     if scan_type == ScanType.AUTOMATIC or scan_type == ScanType.NORMAL:
         assert local_qt_decorator.resdep.bounds == 0.05 / 100  # input %, output decimal
         assert local_qt_decorator.resdep.sweep_rate == 5  # Hz/s
-    else: # if scan_type == ScanType.WIDE:
-        assert local_qt_decorator.resdep.bounds == 0.35 / 100  # 2 hour scan
+    elif scan_type == ScanType.WIDE:         
+        assert local_qt_decorator.resdep.bounds == 0.35 / 100  # 2 hour scan 
         assert local_qt_decorator.resdep.sweep_rate == 10  # Hz/s
 

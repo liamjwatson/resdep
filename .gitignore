@@ -1,5 +1,4 @@
 .venv/
-.cache
 __pycache__/
 config/
 dist/*.txt
@@ -12,6 +11,9 @@ old_scripts/
 LiberaBLM_python_examples/
 site/
 docs/images/resources/
+tests/data/
+tests/resources/
 bitbucket-pipelines.yml
 ty.toml
 .nvim.lua
+.cache

@@ -1,10 +1,15 @@
+import itertools
 import pytest
 import epics
 import datetime
 import logging
-from typing import Union, overload
+import numpy as np
+import numpy.typing as npt
+from pathlib import Path
+from typing import Union, overload, Callable
 
 from resdep.experiment import ResonantDepolarisation
+from resdep.epicsBLMs import BLMs, DefaultT2TriggerDelays
 
 class MockPV():
     """
@@ -12,7 +17,9 @@ class MockPV():
     """
     def __init__(
             self, 
-            get_values: Union[int, float, str, list[float]] = 0
+            pvname = None,
+            callback = None,
+            get_values: Union[int, float, str, list[float], npt.NDArray] = 1,
         ):
         """
         Parameters
@@ -28,8 +35,11 @@ class MockPV():
         
         self.get_call_index = 0
 
+        self.pvname = pvname
         self.connected = True
         self.put_complete = True
+
+        self.callback = callback
 
         return None
 
@@ -44,53 +54,71 @@ class MockPV():
         self.value = value
         return None
 
+    def add_callback(self, callback: Callable, *args, **kwargs):
+        self.callback = callback
+
+    def clear_callbacks(self, *args, **kwargs):
+        self.callback = None
+
 class MockBLMs():
     """
     Mock beam loss monitor(s)
     """
+    # states
+    sectors_connected = [sector for sector in range(14)]
+    # PV
     loss_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
     adc_counter_loss_1_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
     adc_counter_loss_2_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
 
 @pytest.fixture
-def mock_get_pv(*args, **kwargs):
-    """
-    Mock get_pv() method of epics.pv class
-    """
-    return MockPV()
-
+def mock_pv(monkeypatch):
+    def mock_get_pv(pvname = None, callback = None, *args, **kwargs):
+        """
+        Mock get_pv() method of epics.pv class
+        """
+        return MockPV(
+                pvname=pvname,
+                callback=callback
+        )
+    monkeypatch.setattr(epics.pv, "get_pv", mock_get_pv)
 
 @pytest.fixture
-def resdep_with_passing_log_data():
+def resdep_cls():
+    return ResonantDepolarisation()
+
+@pytest.fixture
+def resdep_with_passing_log_data(resdep_cls):
     """
     ResonantDepolarisation configured with PVs that will nicely pass through 
     ResonantDepolarisation._log_data(), not throw an error or an abort request.
     """
-    resdep = ResonantDepolarisation()
-    # pvs
-    setattr(resdep, "sweep_freq_act_PV", MockPV(get_values=1225))
-    setattr(resdep, "sweep_freq_PV", MockPV(get_values=1225))
-    setattr(resdep, "sweep_span_PV", MockPV(get_values=0))
-    setattr(resdep, "sweep_period_PV", MockPV(get_values=0))
-    setattr(resdep, "pattern_PV", MockPV(get_values="1:360"))
-    setattr(resdep, "dcct", MockPV(get_values=200))
-    setattr(resdep, "blm", MockBLMs())
-    # experiment variables
-    setattr(resdep, "log_frequency", 1) # Hz
-    setattr(resdep, "set_sweep_freq", 1225)
-    setattr(resdep, "set_sweep_span", 0)
-    setattr(resdep, "set_sweep_period", 0)
-    setattr(resdep, "set_drive_pattern", "1:360")
-    # loop variables
-    setattr(resdep, "set_sweep_freq", 1225)
-    # states
-    setattr(resdep, "_abort_requested", False)
-    setattr(resdep, "_measuring_SR_BPMs", False)
-    setattr(resdep, "_measuring_TBPMs", False)
-    setattr(resdep, "_measuring_MX3_BPMs", False)
-    # callbacks
-    setattr(resdep, "status_callback", logging.info)
-    # save objects
+    # -------------------------------------------------------------------- PVs
+    setattr(resdep_cls, "sweep_freq_act_PV", MockPV(get_values=1225)) # kHz
+    setattr(resdep_cls, "sweep_freq_PV", MockPV(get_values=1225)) # kHz
+    setattr(resdep_cls, "sweep_span_PV", MockPV(get_values=0))
+    setattr(resdep_cls, "sweep_period_PV", MockPV(get_values=0))
+    setattr(resdep_cls, "masterRF_PV", MockPV(get_values=499682224)) # Hz
+    setattr(resdep_cls, "pattern_PV", MockPV(get_values="1:360"))
+    setattr(resdep_cls, "dcct", MockPV(get_values=200)) # mA
+    setattr(resdep_cls, "blm", MockBLMs())
+    # --------------------------------------------------- experiment variables
+    setattr(resdep_cls, "log_frequency", 1) # Hz
+    setattr(resdep_cls, "set_sweep_freq", 1225) # kHz
+    setattr(resdep_cls, "set_sweep_span", 0)
+    setattr(resdep_cls, "set_sweep_period", 0)
+    setattr(resdep_cls, "set_drive_pattern", "1:360")
+    setattr(resdep_cls, "f_rev", 1.38799e3) # kHz
+    # --------------------------------------------------------- loop variables
+    setattr(resdep_cls, "set_sweep_freq", 1225)
+    # ----------------------------------------------------------------- states
+    setattr(resdep_cls, "_abort_requested", False)
+    setattr(resdep_cls, "_measuring_SR_BPMs", False)
+    setattr(resdep_cls, "_measuring_TBPMs", False)
+    setattr(resdep_cls, "_measuring_MX3_BPMs", False)
+    # -------------------------------------------------------------- callbacks
+    setattr(resdep_cls, "status_callback", logging.info)
+    # ----------------------------------------------------------- save objects
     freqs: list[float] = []
     set_freqs: list[float] = []
     current: list[Union[float, None]] = []
@@ -98,17 +126,143 @@ def resdep_with_passing_log_data():
     formatted_timestamps: list[str] = []
     beam_loss_window_1: dict[str, list[float]] = {}
     beam_loss_window_2: dict[str, list[float]] = {}
-    for key in resdep.blm.loss_PV:
+    for key in resdep_cls.blm.loss_PV:
         beam_loss_window_1[key] = []
         beam_loss_window_2[key] = []
-    setattr(resdep, "timestamps", timestamps)
-    setattr(resdep, "formatted_timestamps", formatted_timestamps)
-    setattr(resdep, "set_freqs", set_freqs)
-    setattr(resdep, "freqs", freqs)
-    setattr(resdep, "current", current)
-    setattr(resdep, "beam_loss_window_1", beam_loss_window_1)
+    setattr(resdep_cls, "timestamps", timestamps)
+    setattr(resdep_cls, "formatted_timestamps", formatted_timestamps)
+    setattr(resdep_cls, "set_freqs", set_freqs)
+    setattr(resdep_cls, "freqs", freqs)
+    setattr(resdep_cls, "current", current)
+    setattr(resdep_cls, "beam_loss_window_1", beam_loss_window_1)
 
-    return resdep
+    return resdep_cls
+
+def test_config_data_path(resdep_cls):
+    # arrange
+    # act
+    resdep_cls._config_data_path()
+
+    # assert
+    assert resdep_cls.data_path.exists() == True
+    assert resdep_cls.data_path.is_dir() == True
+
+# ---- This test needs extra config, since we load the PV in the function
+# ---- Needs a custom PV class with a pvname flag for masterRF
+# def test_calc_revolution_frequency_from_master_RF(
+#         resdep_with_passing_log_data
+#     ):
+#     # arange
+#     resdep = resdep_with_passing_log_data
+#     f_rev_expected: float = (
+#         1e-3 * resdep.masterRF_PV.value / 360
+#     )
+#     f_rev_default: float = resdep.f_rev
+# 
+#     # act
+#     resdep._calc_revolution_frequency_from_master_RF()
+#     f_rev_calculated: float = resdep.f_rev
+# 
+#     # assert
+#     assert f_rev_calculated != f_rev_default
+#     assert f_rev_calculated == f_rev_expected
+
+def test_load_PVs(
+        mock_pv,
+        resdep_with_passing_log_data
+    ):
+    """
+    Smoke test for now (no assertions, just making sure it throws no 
+    errors.
+    Should improve when I understand more about pytest implementation.
+    """
+    # arange
+    resdep = resdep_with_passing_log_data 
+    # monkeypatch.setattr(resdep.epicsBLMs, "BLMs", MockBLMs)
+
+    # act
+    resdep._load_PVs()
+
+    # assert -> None. Does act throw errors?
+
+def test_calculate_adc_counter_windows(
+        monkeypatch,
+        mock_pv,
+        resdep_with_passing_log_data
+        ):
+    """
+    Force test to look at sector 1, and only populate those attributes.
+    """
+    # arange
+    resdep = resdep_with_passing_log_data
+    resdep.blm.init_sumdec_periods = {
+        "1": 50
+    }
+    TIME_ALIGNMENT_PV_NAMES: list[str] = [
+            "IGPF:X:SRAM:MEAN",
+            "IGPF:Y:SRAM:MEAN",
+            "SR01BLM01:signals:adc_integrated.B",
+            "SR01BLM01:triggers:t2:delay_sp",
+    ]
+
+    def mock_get_pv_with_time_alignment(
+            pvname = None, callback = None, *args, **kwargs
+        ):
+        """
+        Mock get_pv() method of epics.pv class
+        """
+        get_values = 1 # default
+        data = 1 # default
+        if pvname in TIME_ALIGNMENT_PV_NAMES:
+            if any([
+                pvname == "IGPF:X:SRAM:MEAN", 
+                pvname == "IGPF:X:SRAM:MEAN"
+            ]):
+                # create fake fill pattern
+                # x & y are the same
+                data = np.ones(
+                        shape=360,
+                        dtype=np.float32
+                )
+                EMPTY_BUCKETS_START = 100
+                EMPTY_BUCKETS_END = 160
+                data[EMPTY_BUCKETS_START:EMPTY_BUCKETS_END] = 0
+            if pvname == "SR01BLM01:signals:adc_integrated.B":
+                # create fake integrated loss / fill pattern
+                SUM_DEC = 86
+                data = np.ones(
+                        shape=SUM_DEC,
+                        dtype=np.int32
+                )
+                N_EMPTY_ADC_CYCLES = 60/360 * SUM_DEC
+                EMPTY_ADC_CYCLES_START = 5
+                EMPTY_ADC_CYCLES_END = (
+                        EMPTY_ADC_CYCLES_START + N_EMPTY_ADC_CYCLES
+                )
+                data[EMPTY_ADC_CYCLES_START:EMPTY_ADC_CYCLES_END] = 0
+            if pvname == "SR01BLM01:triggers:t2:delay_sp":
+                data = DefaultT2TriggerDelays.SECTOR_1 # 11 adc cycles
+                
+            get_values = data
+
+        mock_pv = MockPV(
+                pvname=pvname,
+                callback=callback,
+                get_values=get_values
+        )
+        return mock_pv
+
+    monkeypatch.setattr(epics.pv, "get_pv", mock_get_pv_with_time_alignment)
+
+    resdep.blm.get_loss_PVs()
+
+    
+    # act 
+    resdep.calculate_adc_counter_windows(sector = 1)
+
+    # assert
+    assert resdep.set_drive_pattern == "150:360"
+    
 
 def test_log_data(resdep_with_passing_log_data):
     # arrange
@@ -124,7 +278,7 @@ def test_collect_baseline_data(resdep_with_passing_log_data):
     # arrange
     resdep = resdep_with_passing_log_data
     # act
-    resdep._collect_baseline_data(seconds=10)
+    resdep._collect_baseline_data(duration_seconds=3)
 
     assert len(resdep.freqs) > 0
 

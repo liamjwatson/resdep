@@ -12,7 +12,6 @@ from resdep._experiment_handlers import (
         SupportsStartTimerSignal,
         SupportsADCWindowsSignal
 )
-from resdep.experiment import ScanType
 import resdep.simpleGUI as simpleGUI
 
 

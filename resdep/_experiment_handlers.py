@@ -62,7 +62,13 @@ class ExperimentHandlerContract(Protocol):
 
     def emit_progress(self, step: int, max_steps: int):...
         
-    def emit_results(self, formatted_beam_energy: str, error: str):...
+    def emit_results(
+        self, 
+        E0_mean_sigfig: float,
+        E0_stddev_sigfig: float, 
+        formatted_beam_energy: str, 
+        error: str
+        ): ... 
 
 class ExperimentHandler(QObject):
     """
@@ -72,7 +78,8 @@ class ExperimentHandler(QObject):
     See ExperimentHandlerContract (protocol) instead.
     """
     progress = Signal(int, int)  # current step, max steps
-    results = Signal(str, str) # formatted_beam_energy (results), error
+    # Beam energy, stddev, formatted_beam_energy (results), error
+    results = Signal(float, float, str, str) 
     finished = Signal() 
 
     def run(self):...
@@ -83,7 +90,13 @@ class ExperimentHandler(QObject):
 
     def emit_progress(self, step: int, max_steps: int):...
         
-    def emit_results(self, formatted_beam_energy: str, error: str):...
+    def emit_results(
+        self, 
+        E0_mean_sigfig: float,
+        E0_stddev_sigfig: float, 
+        formatted_beam_energy: str, 
+        error: str
+        ): ... 
 
 class LocalQtDecorator(ExperimentHandler):
     """
@@ -146,6 +159,8 @@ class LocalQtDecorator(ExperimentHandler):
         scan_type: ScanType (enum)
             One of `ScanType.AUTOMATIC`, `.NORMAL`, or `.WIDE`.
         """
+        if scan_type == ScanType.NONE:
+            return None
         if scan_type == ScanType.AUTOMATIC or scan_type == ScanType.NORMAL:
             self.resdep.bounds = 0.05 / 100  # input %, output decimal
             self.resdep.sweep_rate = 5  # Hz/s
@@ -162,7 +177,11 @@ class LocalQtDecorator(ExperimentHandler):
         return None
     #--------------------------------------------------------------------------
     def emit_results(
-        self, formatted_beam_energy: str, error: str
+        self, 
+        E0_mean_sigfig: float,
+        E0_stddev_sigfig: float, 
+        formatted_beam_energy: str, 
+        error: str
     ) -> None:
         self.results.emit(formatted_beam_energy, error)
         return None
@@ -241,7 +260,11 @@ class IOCInterface(ExperimentHandler):
         pass 
     
     def emit_results(
-        self, formatted_beam_energy: str, error: str
+        self, 
+        E0_mean_sigfig: float,
+        E0_stddev_sigfig: float, 
+        formatted_beam_energy: str, 
+        error: str
     ) -> None:
         # get some PV values
         # Possibly cast error enum 

@@ -1,0 +1,160 @@
+# resonant_depolarisation.db
+# v1
+# Fri Jul 31 10:00:00 2026
+# Last checked in by: watsonl
+#
+# Description
+# This module is used to passively / non-destructively measure the energy 
+# of the stored electron beam through its connection with electron spin 
+# precession, beam polarisation, Touschek scattering and beam loss.
+# Check the associated confluence for a complete physics explanation.
+# 
+# This diagnostic kicks the spin vectors off-axis using the bunch-by-bunch 
+# and measures the corresponding increase in beam loss when the kicker 
+# frequency is resonant with the spin tune. This resonant frequency encodes the 
+# beam energy.
+#
+# Diagnostic workflow:
+# - Initialisation (connect to PVs, logging config, etc.)
+# - Collect baseline data (beam loss with no kicker)
+# - BbB kicker -> ON
+# - EXPERIMENT LOOP
+# -- Consists of sweeping the kicker frequency over a given range
+# -- Calling _log_data() at 10 Hz
+# -- report progress at 1 Hz
+# -- Watching for abort requests, injections, beam dumps, wiggler ramps
+# -- END
+# - Cleanup (turn off kicker, reset BLM settings, etc.)
+# - Data analysis pipeline
+# - Report results (to GUI)
+#
+# The ResonantDepolarisation() class can be removed from memory and spun 
+# up again, but this would mean connecting to PVs every time. The class can 
+# easily sit idle and wait for a subsequent call to start_experiment(). 
+# The PV connections are cached.
+#
+#
+# Template formal macro parameters:
+# NAME    - record/device name prefix, e.g. SR11BCM01
+# SIGNAL  - signal name e.g. CURRENT
+# EGU     - enginering units, e.g. mA
+# PREC    - precision, e.g. 3
+# LOW     - minimum allowed value, e.g. 50.0
+# HIGH    - maximum allowed value, e.g. 220.0
+#
+# Copyright (c) 2026 Australian Synchrotron
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# Licence as published by the Free Software Foundation; either
+# version 2.1 of the Licence, or (at your option) any later version.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public Licence for more details.
+#
+# You should have received a copy of the GNU Lesser General Public
+# Licence along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Original author: Liam Watson
+# Maintained by:   Andrew Starritt
+#
+# Contact details:
+# as-open-source@ansto.gov.au
+# 800 Blackburn Road, Clayton, Victoria 3168, Australia.
+#
+# --------------------------------------------------------------------- Control
+# Read by the IocApi
+# 
+record (bo, "$(DEVICE):RUN_CMD") {
+    field (DESC, "Start resonant depolarisation")
+    field (SCAN, "Passive")
+    field (HIGH, "1.0")
+    field (ZNAM, "No Action")
+    field (ONAM, "Start")
+}
+
+record (bo, "$(DEVICE):ABORT_CMD") {
+    field (DESC, "Abort resonant depolarisation")
+    field (SCAN, "Passive")
+    field (HIGH, "1.0")
+    field (ZNAM, "No Action")
+    field (ONAM, "Start")
+}
+
+record (mbbo, "$(DEVICE):SCAN_TYPE_CMD") {
+    field (DESC, "ResDep requested scan type")
+    field (SCAN, "Passive")
+    field (ZRST, "NONE")
+    field (ONST, "AUTOMATIC")
+    field (TWST, "NORMAL")
+    field (THST, "WIDE")
+}
+
+# -------------------------------------------------------------------- Feedback
+
+# ----- Results
+record (ai, "$(DEVICE):BEAM_ENERGY") {
+    field(DESC, "Resonant depolarisation beam energy measurement")
+    field (SCAN, "Passive")
+    field(PREC, "6")
+    field(EGU, "GeV")
+}
+
+record (ai, "$(DEVICE):BEAM_ENERGY_TWOSTD") {
+    field(DESC, "ResDep beam energy error to two standard deviations")
+    field (SCAN, "Passive")
+    field(PREC, "6")
+    field(EGU, "GeV")
+}
+
+# Example: "3.03138 GeV ± 10 keV"
+record (stringin, "(DEVICE):BEAM_ENERGY_FORMATTED") {
+    field(DESC, "Formatted beam energy string")
+}
+
+record (ai, "$(DEVICE):PROGRESS") {
+    field(DESC, "Resonant depolarisation progress")
+    field (SCAN, "Passive")
+    field(PREC, "1")
+    field(EGU, "%")
+    field(ADEL, "0.9")
+    field(MDEL, "0.9")
+}
+
+# ---- Diagnostics
+record (mbbi, "$(DEVICE):STATE") {
+    field (DESC, "Resonant depolarisation state")
+    field (SCAN, "Passive")
+    field (ZRST, "READY")
+    field (ONST, "ABORTED")
+    field (TWST, "INITIALISING")
+    field (THST, "RUNNING")
+}
+
+record (stringin, "(DEVICE):ERROR_MSG") {
+    field(DESC, "Detailied error test")
+}
+
+record (mbbi, "$(DEVICE):SCAN_TYPE") {
+    field (DESC, "ResDep requested scan type")
+    field (SCAN, "Passive")
+    field (ZRST, "NONE")
+    field (ONST, "AUTOMATIC")
+    field (TWST, "NORMAL")
+    field (THST, "WIDE")
+}
+
+record (mbbi, "$(DEVICE):RUN_INHIBIT_STATUS") {
+    field (DESC, "Able to run status")
+    field (SCAN, "Passive")
+    field (ZRST, "ABLE_TO_RUN")
+    field (ONST, "PVS_NOT_CONNECTED")
+    field (TWST, "NOT_USER_BEAM")
+    field (THST, "NOT_ENOUGH_CURRENT")
+    field (FRST, "RECENT_WIGGLER_RAMP")
+    field (FVST, "RECENT_BEAM_INJECTION")
+}
+
