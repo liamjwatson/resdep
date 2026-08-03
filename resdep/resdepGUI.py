@@ -1076,11 +1076,32 @@ class MainWindow(QWidget):
             with open(path / "set_freqs.txt", "r") as f:
                 for line in f.readlines():
                     self.resdep.set_freqs.append(float(line))
+
             # load beam loss windows
-            with open(path / "adc_counter_loss_1.json", "r") as f:
-                self.resdep.beam_loss_window_1 = json.load(f)
-            with open(path / "adc_counter_loss_2.json", "r") as f:
-                self.resdep.beam_loss_window_2 = json.load(f)
+            beam_loss_files: list[Path] = [
+                file for file in path.glob("adc_counter_loss*")
+            ]
+            npz_exists: list[bool] = [file.suffix == ".npz" for file in beam_loss_files]
+            if any(npz_exists):
+                beam_loss_window_1: dict[str, list[float]] = {}
+                beam_loss_window_2: dict[str, list[float]] = {}
+                with np.load(path / "adc_counter_loss_1.npz") as loaded:
+                    for key in loaded.files:
+                        beam_loss_window_1[key] = loaded[key].tolist()
+                with np.load(path / "adc_counter_loss_2.npz") as loaded:
+                    for key in loaded.files:
+                        beam_loss_window_2[key] = loaded[key].tolist()
+
+            else: # files are in legacy .json format
+                with open(path / "adc_counter_loss_1.json", "r") as f:
+                    beam_loss_window_1 = json.load(f)
+                # beam_losses adc window 2
+                with open(path / "adc_counter_loss_2.json", "r") as f:
+                    beam_loss_window_2 = json.load(f)
+            # finally
+            self.resdep.beam_loss_window_1 = beam_loss_window_1
+            self.resdep.beam_loss_window_2 = beam_loss_window_2
+
             # load res_freq as guess for fit
             with open(path / "metadata.json", "r") as f:
                 metadata: dict = json.load(f)

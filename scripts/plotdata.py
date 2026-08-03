@@ -85,12 +85,26 @@ with open(os.path.join(data_path, "current.txt"), "r") as f:
         current.append(float(line))
 
 # beam_losses adc window 1
-with open(os.path.join(data_path, "adc_counter_loss_1.json"), "r") as f:
-    beam_loss_window_1 = json.load(f)
+beam_loss_files: list[Path] = [
+    file for file in data_path.glob("adc_counter_loss*")
+]
+npz_exists: list[bool] = [file.suffix == ".npz" for file in beam_loss_files]
+if any(npz_exists):
+    beam_loss_window_1: dict[str, list[float]] = {}
+    beam_loss_window_2: dict[str, list[float]] = {}
+    with np.load(data_path / "adc_counter_loss_1.npz") as loaded:
+        for key in loaded.files:
+            beam_loss_window_1[key] = loaded[key].tolist()
+    with np.load(data_path / "adc_counter_loss_2.npz") as loaded:
+        for key in loaded.files:
+            beam_loss_window_2[key] = loaded[key].tolist()
 
-# beam_losses adc window 2
-with open(os.path.join(data_path, "adc_counter_loss_2.json"), "r") as f:
-    beam_loss_window_2 = json.load(f)
+else: # files are in legacy .json format
+    with open(data_path / "adc_counter_loss_1.json", "r") as f:
+        beam_loss_window_1 = json.load(f)
+    # beam_losses adc window 2
+    with open(data_path / "adc_counter_loss_2.json", "r") as f:
+        beam_loss_window_2 = json.load(f)
 
 # # ODB beam size and offset
 # with open(os.path.join(data_path, "ODB_data.json"), "r") as f:
