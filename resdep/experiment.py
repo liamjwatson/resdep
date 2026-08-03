@@ -1602,10 +1602,32 @@ class ResonantDepolarisation:
                 for value in self.formatted_timestamps:
                     f.write(value + "\n")
 
-            with open(self.data_path / "adc_counter_loss_1.json", "w") as f:
-                json.dump(self.beam_loss_window_1, f)
-            with open(self.data_path / "adc_counter_loss_2.json", "w") as f:
-                json.dump(self.beam_loss_window_2, f)
+            # Saving the beam loss data as raw jsons results in large file 
+            # sizes (e.g. 3 MB per file). This adds up quickly and the data 
+            # folder in resdep for 6 months worth of data is ~ 3 GB. 
+            # Now, we cast the list[float] values to numpy arrays and save as 
+            # compressed .npz -> 400 kB per file (86% reduction).
+            # To load these files, use:
+            # ```py
+            # >>> restored_dict: dict[str, npt.NDArray] = {}
+            # >>> with np.load("adc_counter_loss_1.npz") as loaded:
+            # ...   for key in loaded.files:
+            # ...       restored_dict[key] = loaded[key]
+            # ```
+            beam_loss_window_1_np: dict[str, npt.NDArray[np.floating]] = {}
+            beam_loss_window_2_np: dict[str, npt.NDArray[np.floating]] = {}
+            for key, list_of_values in self.beam_loss_window_1.items():
+                beam_loss_window_1_np[key] = np.array(list_of_values)
+            for key, list_of_values in self.beam_loss_window_2.items():
+                beam_loss_window_2_np[key] = np.array(list_of_values)
+            np.savez_compressed(
+                    self.data_path / "adc_counter_loss_1.npz", 
+                    **beam_loss_window_1_np
+            )
+            np.savez_compressed(
+                    self.data_path / "adc_counter_loss_2.npz", 
+                    **beam_loss_window_2_np
+            )
 
             with open(self.data_path / "injections.txt", "w") as f:
                 for value in self.injections_str:

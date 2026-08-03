@@ -168,14 +168,28 @@ def create_data_objects(
             set_freqs.append(float(line)) # kHz
     resdep.set_freqs = set_freqs
 
-    beam_loss_window_1: dict[str, list[float]]
-    with open(data_path / "adc_counter_loss_1.json", "r") as f:
-        beam_loss_window_1 = json.load(f)
-    resdep.beam_loss_window_1 = beam_loss_window_1
+    beam_loss_files: list[Path] = [
+        file for file in data_path.glob("adc_counter_loss*")
+    ]
+    npz_exists: list[bool] = [file.suffix == ".npz" for file in beam_loss_files]
+    if any(npz_exists):
+        beam_loss_window_1: dict[str, list[float]] = {}
+        beam_loss_window_2: dict[str, list[float]] = {}
+        with np.load(data_path / "adc_counter_loss_1.npz") as loaded:
+            for key in loaded.files:
+                beam_loss_window_1[key] = loaded[key].tolist()
+        with np.load(data_path / "adc_counter_loss_2.npz") as loaded:
+            for key in loaded.files:
+                beam_loss_window_2[key] = loaded[key].tolist()
 
-    beam_loss_window_2: dict[str, list[float]]
-    with open(data_path / "adc_counter_loss_2.json", "r") as f:
-        beam_loss_window_2 = json.load(f)
+    else: # files are in legacy .json format
+        with open(data_path / "adc_counter_loss_1.json", "r") as f:
+            beam_loss_window_1 = json.load(f)
+        # beam_losses adc window 2
+        with open(data_path / "adc_counter_loss_2.json", "r") as f:
+            beam_loss_window_2 = json.load(f)
+
+    resdep.beam_loss_window_1 = beam_loss_window_1
     resdep.beam_loss_window_2 = beam_loss_window_2
     
     processed_data = ProcessedData(resdep=resdep)
