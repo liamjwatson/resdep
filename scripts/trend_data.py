@@ -100,19 +100,42 @@ def get_data_paths(dates: list[str]) -> list[Path]:
     -------
     data_paths: list[Path]
         list of pathlib.Path objects
-    """     
+    """                     
     path_prefix = Path("Z:/usr/data/resdep")
     data_paths: list[Path] = []
+    filenames: list[str] = [
+            "set_freqs",
+            "adc_counter_loss_1",
+            "adc_counter_loss_2",
+            "timestamps"
+    ]
+    legacy_extensions: list[str] = [
+            ".txt",
+            ".json",
+            ".json",
+            ".txt"
+    ]
+    legacy_filenames: list[str] = [
+            name+ext for name, ext in zip(filenames, legacy_extensions)
+    ]
+    compressed_extensions: list[str] = [".npz"] * len(filenames)
+    compressed_filenames: list[str] = [
+            name+ext for name, ext in zip(filenames, compressed_extensions)
+    ]
     for date in dates:
         year = date[:4]
         date_path = path_prefix / year /  date 
         for path in date_path.iterdir():
-            if path.is_dir() and all([
-                (path / "set_freqs.txt").exists(),
-                (path / "adc_counter_loss_1.json").exists(),
-                (path / "adc_counter_loss_2.json").exists(),
-                (path / "timestamps.txt").exists(),
-                ]):
+            legacy_files_exist: list[bool] = [
+                (path / filename).exists() for filename in legacy_filenames
+            ]
+            compressed_files_exist: list[bool] = [
+                (path / filename).exists() for filename in compressed_filenames
+            ]
+
+            if path.is_dir() and (
+                    all(legacy_files_exist) or all(compressed_files_exist)
+                ):
                 data_paths.append(path)
                 print(f"found {path}")
 
@@ -130,15 +153,28 @@ def get_timestamps(
     timestamps: list[str] = []
     datetimes: list[datetime.datetime] = []
     for path in data_paths:
-        with open(path / "timestamps.txt", "r") as f:
-            first_timestamp: str = f.readline()
 
-        timestamps.append(first_timestamp)
-        start_time: datetime.datetime = datetime.datetime.strptime(
-                first_timestamp[:-1],
-                "%Y-%m-%d %H:%M:%S"
-        )
-        datetimes.append(start_time)
+        timestamps_files = [file for file in path.glob("timestamps.*")]
+        npz_exists: bool = any([file.suffix == ".npz" for file in timestamps_files])
+        if npz_exists:
+            with np.load(path / "timestamps.npz") as loaded:
+                timestamps_datetimes = loaded["arr_0"].tolist()
+
+            start_time: datetime.datetime = timestamps_datetimes[0]
+            # convert to str
+            first_timestamp: str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+            timestamps.append(first_timestamp)
+        else:
+            with open(path / "timestamps.txt", "r") as f:
+                first_timestamp: str = f.readline()
+
+            timestamps.append(first_timestamp)
+            # convert to datetime
+            start_time: datetime.datetime = datetime.datetime.strptime(
+                    first_timestamp[:-1],
+                    "%Y-%m-%d %H:%M:%S"
+            )
+            datetimes.append(start_time)
 
     return timestamps, datetimes
 
@@ -163,9 +199,15 @@ def create_data_objects(
     resdep.sweep_step_size = metadata["sweep step size (Hz)"]
 
     set_freqs: list[float] = []
-    with open(data_path / "set_freqs.txt", "r") as f:
-        for line in f.readlines():
-            set_freqs.append(float(line)) # kHz
+    set_freqs_files = [file for file in data_path.glob("set_freqs.*")]
+    npz_exists: bool = any([file.suffix == ".npz" for file in set_freqs_files])
+    if npz_exists:
+        with np.load(data_path / "set_freqs.npz") as loaded:
+            set_freqs = loaded["arr_0"].tolist()
+    else:
+        with open(data_path / "set_freqs.txt", "r") as f:
+            for line in f.readlines():
+                set_freqs.append(float(line)) # kHz
     resdep.set_freqs = set_freqs
 
     beam_loss_files: list[Path] = [

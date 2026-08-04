@@ -351,7 +351,7 @@ class MainWindow(QWidget):
         automatic_form_layout = QFormLayout()
         automatic_form.setLayout(automatic_form_layout)
         self.time_between_automatic_scans = QDoubleSpinBox(
-            minimum=1, value=1, singleStep=0.1, decimals=2, suffix=" hours"
+            minimum=1, value=2, singleStep=0.1, decimals=2, suffix=" hours"
         )
         automatic_form_layout.addRow(
             "Time between scans:\n(end to start)",
@@ -446,19 +446,27 @@ class MainWindow(QWidget):
         seconds: str = self.start_time.strftime("%Ss")
         filename: str = f"logfile_{date}_{hours}-{seconds}.log"
     
-        logger_format: str = "%(asctime)s - %(levelname)s - %(message)s"
-        logger_formatter: logging.Formatter = logging.Formatter(logger_format)
         self.logger: logging.Logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
-        stream_handler: logging.StreamHandler = logging.StreamHandler()
-        stream_handler.setFormatter(logger_formatter)
-        file_handler: logging.FileHandler = logging.FileHandler(
+
+        # create file handler which logs even debug messages
+        file_handler = logging.FileHandler(
                 filename=self.logfile_path/filename
         )
-        file_handler.setFormatter(logger_formatter)
-        self.logger.addHandler(stream_handler)
+        file_handler.setLevel(logging.DEBUG)
+        # create console handler with a higher log level
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        # create formatter and add it to the handlers
+        formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - [%(levelname)s] - %(message)s'
+        )
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        # add the handlers to logger
         self.logger.addHandler(file_handler)
-    
+        self.logger.addHandler(console_handler)
+
         self.logger.debug(self.start_time)
         self.logger.debug("--- simpleGUI starting up ---")
 
@@ -869,6 +877,7 @@ class MainWindow(QWidget):
         )
 
         if able_to_run:
+            self.logger.debug("Starting automatic scan...")
             self.experiment_handler.apply_scan_settings(ScanType.AUTOMATIC)
             self.run_experiment()
         else:
@@ -892,6 +901,7 @@ class MainWindow(QWidget):
         )
 
         if able_to_run:
+            self.logger.debug("Starting normal scan...")
             self.experiment_handler.apply_scan_settings(ScanType.NORMAL)
             self.run_experiment()
         else:
@@ -931,6 +941,7 @@ class MainWindow(QWidget):
             # if yes
             if answer == QMessageBox.StandardButton.Yes:
                 self.close()
+                self.logger.debug("Starting wide search...")
                 self.experiment_handler.apply_scan_settings(ScanType.WIDE)
                 self.run_experiment()
             else:

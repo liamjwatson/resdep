@@ -5,7 +5,6 @@ Designed to called through one of the GUIs (
 [`resdepGUI`][resdep.resdepGUI], [`simpleGUI`][resdep.simpleGUI]).
 Can also be instanced and run natively in command line.
 """
-
 """
 ██████╗ ███████╗███████╗ ██████╗ ███╗   ██╗ █████╗ ███╗   ██╗████████╗  
 ██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║██╔══██╗████╗  ██║╚══██╔══╝  
@@ -59,6 +58,12 @@ class ScanType(Enum):
     AUTOMATIC = 1
     NORMAL = 2
     WIDE = 3
+class State(IntEnum):
+    READY = 0
+    ABORTED = 1
+    INITIALISING = 2 
+    RUNNING = 3
+    FINISHED = 4
 
 class SweepDirection(IntEnum):
     """
@@ -148,6 +153,7 @@ class ResonantDepolarisation:
         timer_callback: Optional[Callable] = None,
         ADC_windows_callback: Optional[Callable] = None,
         results_callback: Optional[Callable] = None,
+        state_callback: Optional[Callable] = None
     ) -> None:
         """
         Initialise default scan values.
@@ -216,6 +222,7 @@ class ResonantDepolarisation:
         self.timer_callback = timer_callback
         self.ADC_windows_callback = ADC_windows_callback
         self.results_callback = results_callback
+        self.state_callback = state_callback
         self._abort_requested = False
 
         # --- init states
@@ -264,6 +271,10 @@ class ResonantDepolarisation:
         self.data_path: Path
 
         self._calculate_range()
+
+        self.state = State.READY
+        if self.state_callback is not None:
+            self.state_callback(state=self.state)
 
         return None
     # *--------------------------------* #
@@ -316,6 +327,7 @@ class ResonantDepolarisation:
         - Updates experiment progress to progress bar on GUI or console
         """                                         
 
+        self.state = State.INITIALISING
         self._has_stored_data: bool = False
 
         try:  # if any of this fails then the experiment should shutdown
@@ -348,6 +360,9 @@ class ResonantDepolarisation:
             self._collect_baseline_data(duration_seconds=10)
             self._has_stored_data = True
 
+            self.state = State.RUNNING
+            if self.state_callback is not None:
+                self.state_callback(state=self.state)
             self._depolarise()
 
         except Exception:
@@ -386,6 +401,9 @@ class ResonantDepolarisation:
                     + "Check the BbB Y DRIVE just in case: \n"
                     + "IGPF:Y:DRIVE:AMPL"
                 )
+            except Exception:
+                error = traceback.format_exc()
+                self.logger.error(error)
 
             try:
                 self.injection_trigger.clear_callbacks()
@@ -394,12 +412,19 @@ class ResonantDepolarisation:
                     "Tried to remove epics.pv callback but " 
                     + "injection trigger PV not loaded."
                 )
+            except Exception:
+                error = traceback.format_exc()
+                self.logger.error(error)
 
 
             # restore epicsBLM window settings
             self.logger.info("Attempting to restore BLM inits...")
-            self.blm.restore_inits(mode="adc_counter_masks")
-            self.blm.restore_inits(mode="decimation")
+            try:
+                self.blm.restore_inits(mode="adc_counter_masks")
+                self.blm.restore_inits(mode="decimation")
+            except Exception:
+                error = traceback.format_exc()
+                self.logger.error(error)
 
             if self.plot_callback is None:
                 self.logger.info(
@@ -425,6 +450,10 @@ class ResonantDepolarisation:
                     self.results_callback(formatted_beam_energy, error)
 
             self.logger.info("Done everything :)")
+
+            self.state = State.FINISHED
+            if self.state_callback is not None:
+                self.state_callback(state=self.state)
 
         return None
     # -------------------------------------------------------------------------
@@ -1058,10 +1087,17 @@ class ResonantDepolarisation:
         return None
     # -------------------------------------------------------------------------
     def _config_logger(self,) -> None:
-        logger_format = "%(asctime)s - %(levelname)s - %(message)s"
-        self.logger_formatter = logging.Formatter(logger_format)
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
+        # create console handler with a higher log level
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        # create formatter and add it to the handlers
+        self.logger_formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - [%(levelname)s] - %(message)s'
+        )
+        # add handler to the logger
+        console_handler.setFormatter(self.logger_formatter)
         return None
     # -------------------------------------------------------------------------
     def _config_data_path(
@@ -1098,13 +1134,14 @@ class ResonantDepolarisation:
 
         handlers = self.logger.handlers.copy()
         for handler in handlers:
-            if isinstance(handler, logging.FileHandler):
+            if type(handler) is logging.FileHandler:
                 handler.close()
                 self.logger.removeHandler(handler)
 
         file_handler = logging.FileHandler(
             filename=self.data_path/"logfile.log"
         )
+        file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(self.logger_formatter)
         self.logger.addHandler(file_handler)
 
@@ -1587,26 +1624,26 @@ class ResonantDepolarisation:
             with open(self.data_path / "metadata.json", "w") as f:
                 json.dump(self.metadata, f)
 
-            with open(self.data_path / "freqs.txt", "w") as f:
-                for value in self.freqs:
-                    f.write(str(value) + "\n")
-            with open(self.data_path / "set_freqs.txt", "w") as f:
-                for value in self.set_freqs:
-                    f.write(str(value) + "\n")
+            freqs_np = np.array(self.freqs, dtype=np.float64)
+            np.savez_compressed(self.data_path / "freqs.npz", freqs_np)
 
-            with open(self.data_path / "current.txt", "w") as f:
-                for value in self.current:
-                    f.write(str(value) + "\n")
+            set_freqs_np = np.array(self.set_freqs, dtype=np.float64)
+            np.savez_compressed(self.data_path / "set_freqs.npz", set_freqs_np)
 
-            with open(self.data_path / "timestamps.txt", "w") as f:
-                for value in self.formatted_timestamps:
-                    f.write(value + "\n")
+            current_np = np.array(self.current, dtype=np.float64)
+            np.savez_compressed(self.data_path / "current.npz", current_np)
+
+            timetamps_np = np.array(self.timestamps, dtype=np.datetime64)
+            np.savez_compressed(self.data_path / "timestamps.npz", timetamps_np)
+
 
             # Saving the beam loss data as raw jsons results in large file 
             # sizes (e.g. 3 MB per file). This adds up quickly and the data 
             # folder in resdep for 6 months worth of data is ~ 3 GB. 
             # Now, we cast the list[float] values to numpy arrays and save as 
             # compressed .npz -> 400 kB per file (86% reduction).
+            # I have also moved the freqs, set_freqs, current and timestamps
+            # to use npz compression
             # To load these files, use:
             # ```py
             # >>> restored_dict: dict[str, npt.NDArray] = {}
@@ -1786,7 +1823,11 @@ class ResonantDepolarisation:
             if status == ADSRampStatus.RAMPING:
                 _is_wiggler_ramping = True
 
-        if _is_wiggler_ramping:
+        need_to_abort: bool = any([
+                self.state == State.INITIALISING,
+                self.state == State.RUNNING
+        ])
+        if _is_wiggler_ramping and need_to_abort:
             self.logger.critical(
                 "Detected the ramping of a wiggler field. Aborting scan." 
             )
@@ -1805,6 +1846,9 @@ class ResonantDepolarisation:
         loop on the next iteration.
         """
         self._abort_requested = True
+        self.state = State.ABORTED
+        if self.state_callback is not None:
+            self.state_callback(state=self.state)
         return None
     # *--------------------------------* #
     # *----------- Utilities ----------* #
