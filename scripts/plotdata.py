@@ -52,26 +52,44 @@ with open(data_path / "metadata.json", "r") as f:
 print("---metadata---")
 print(metadata)
 
-# freqs txt
+# freqs txt | npz
 freqs: list[float] = []
-with open(os.path.join(data_path, "freqs.txt"), "r") as f:
-    for line in f.readlines():
-        freqs.append(float(line) / 1e3)  # Hz -> kHz
+freqs_files = [file for file in data_path.glob("freqs.*")]
+npz_exists: bool = any([file.suffix == ".npz" for file in freqs_files])
+if npz_exists:
+    with np.load(data_path / "freqs.npz") as loaded:
+        freqs = loaded["arr_0"].tolist()
+else:
+    with open(os.path.join(data_path, "freqs.txt"), "r") as f:
+        for line in f.readlines():
+            freqs.append(float(line) / 1e3)  # Hz -> kHz
 
 set_freqs: list[float] = []
-with open(os.path.join(data_path, "set_freqs.txt"), "r") as f:
-    for line in f.readlines():
-        set_freqs.append(float(line))  # kHz
+set_freqs_files = [file for file in data_path.glob("set_freqs.*")]
+npz_exists: bool = any([file.suffix == ".npz" for file in set_freqs_files])
+if npz_exists:
+    with np.load(data_path / "set_freqs.npz") as loaded:
+        set_freqs = loaded["arr_0"].tolist()
+else:
+    with open(os.path.join(data_path, "set_freqs.txt"), "r") as f:
+        for line in f.readlines():
+            set_freqs.append(float(line))  # kHz
 
 # timestamps txt
 timestamps_strings: list[str] = []
-with open(data_path / "timestamps.txt", "r") as f:
-    for line in f.readlines():
-        timestamps_strings.append(line[:-1])
-# convert to datetime
-timestamps_datetimes: list[datetime] = [
-    datetime.strptime(ts, "%Y-%m-%d %H:%M:%S") for ts in timestamps_strings
-]
+timestamps_files = [file for file in data_path.glob("timestamps.*")]
+npz_exists: bool = any([file.suffix == ".npz" for file in timestamps_files])
+if npz_exists:
+    with np.load(data_path / "timestamps.npz") as loaded:
+        timestamps_datetimes = loaded["arr_0"].tolist()
+else:
+    with open(data_path / "timestamps.txt", "r") as f:
+        for line in f.readlines():
+            timestamps_strings.append(line[:-1])
+    # convert to datetime
+    timestamps_datetimes: list[datetime] = [
+        datetime.strptime(ts, "%Y-%m-%d %H:%M:%S") for ts in timestamps_strings
+    ]
 # Create minutes axis
 start_time = timestamps_datetimes[0]
 minutes: list[float] = [
@@ -80,9 +98,14 @@ minutes: list[float] = [
 
 # current txt
 current: list[float] = []
-with open(os.path.join(data_path, "current.txt"), "r") as f:
-    for line in f.readlines():
-        current.append(float(line))
+current_files = [file for file in data_path.glob("current.*")]
+npz_exists: bool = any([file.suffix == ".npz" for file in current_files])
+if npz_exists:
+    with np.load(data_path / "current.npz") as loaded:
+        current = loaded["arr_0"].tolist()
+    with open(os.path.join(data_path, "current.txt"), "r") as f:
+        for line in f.readlines():
+            current.append(float(line))
 
 # beam_losses adc window 1
 beam_loss_files: list[Path] = [

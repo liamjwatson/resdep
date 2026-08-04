@@ -1069,13 +1069,28 @@ class MainWindow(QWidget):
             # else:
             #     path = path.replace(ntpath.sep, os.sep)
             path = Path(path)
-            # load freqs txt
-            with open(path / "freqs.txt", "r") as f:
-                for line in f.readlines():
-                    self.resdep.freqs.append(float(line))  # Hz -> kHz
-            with open(path / "set_freqs.txt", "r") as f:
-                for line in f.readlines():
-                    self.resdep.set_freqs.append(float(line))
+            # freqs txt | npz
+            freqs_files = [file for file in path.glob("freqs.*")]
+            npz_exists: bool = any([file.suffix == ".npz" for file in freqs_files])
+            if npz_exists:
+                with np.load(path / "freqs.npz") as loaded:
+                    self.resdep.freqs = loaded["arr_0"].tolist()
+            else:
+                # load freqs txt
+                with open(path / "freqs.txt", "r") as f:
+                    for line in f.readlines():
+                        self.resdep.freqs.append(float(line))  # Hz -> kHz
+
+            # set_freqs txt | npz
+            set_freqs_files = [file for file in path.glob("set_freqs.*")]
+            npz_exists: bool = any([file.suffix == ".npz" for file in set_freqs_files])
+            if npz_exists:
+                with np.load(path / "set_freqs.npz") as loaded:
+                    self.resdep.set_freqs = loaded["arr_0"].tolist()
+            else:
+                with open(path / "set_freqs.txt", "r") as f:
+                    for line in f.readlines():
+                        self.resdep.set_freqs.append(float(line))
 
             # load beam loss windows
             beam_loss_files: list[Path] = [
