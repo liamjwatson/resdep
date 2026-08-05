@@ -27,6 +27,7 @@ Can also be instanced and run natively in command line.
 """                         
 
 import itertools
+import re
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 import platform
@@ -58,6 +59,7 @@ class ScanType(Enum):
     AUTOMATIC = 1
     NORMAL = 2
     WIDE = 3
+
 class State(IntEnum):
     READY = 0
     ABORTED = 1
@@ -1111,12 +1113,24 @@ class ResonantDepolarisation:
         hours_str = self.start_time.strftime("%H%Mh")
         seconds_str = self.start_time.strftime("%Ss")
         hostname = platform.node()
-        try:
-            hostname.index("OPI")
+        match_ioc = re.search("ioc", hostname, re.IGNORECASE)
+        match_opi = re.search("opi", hostname, re.IGNORECASE)
+        if match_ioc is not None and match_opi is not None:
+            raise ValueError(
+                    f"$HOSTNAME={hostname} matched both 'ioc' and 'opi'. " 
+                    +"Cannot decide which logic to implement."
+            )
+        if match_ioc is not None:
+            raise NotImplementedError(
+                    "IOC data path not configured. See _config_data_path "
+                    +"in the ResonantDepolarisation() class in "
+                    +"experiment.py of the resdep module"
+            )
+        elif match_opi is not None:
             self.data_path = Path(
                 f"/asp/usr/data/resdep/{year_str}/{date_str}/{hours_str}"
             )
-        except ValueError:
+        else: # no match to opi or ioc
             current_path = Path.cwd()
             self.data_path = (
                 current_path / "data" / "resdep" / date_str / hours_str

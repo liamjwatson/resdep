@@ -124,6 +124,15 @@ record (ai, "$(DEVICE):PROGRESS") {
     field(MDEL, "0.9")
 }
 
+record (ai, "$(DEVICE):ESTIMATED_POLARISATION") {
+    field(DESC, "Estimate of beam polarisation")
+    field (SCAN, "Passive")
+    field(PREC, "3")
+    field(EGU, "%")
+    field(ADEL, "0.9")
+    field(MDEL, "0.9")
+}
+
 # ---- Diagnostics
 record (mbbi, "$(DEVICE):STATE") {
     field (DESC, "Resonant depolarisation state")
@@ -132,6 +141,7 @@ record (mbbi, "$(DEVICE):STATE") {
     field (ONST, "ABORTED")
     field (TWST, "INITIALISING")
     field (THST, "RUNNING")
+    field (FRST, "FINISHED")
 }
 
 record (stringin, "(DEVICE):ERROR_MSG") {

@@ -602,9 +602,9 @@ class Fitter:
 
             (   
                 *_, 
-                E0_mean_sigfig, 
-                E0_stddev_sigfig, 
-                formatted_beam_energy
+                E0_mean_sigfig, # GeV
+                E0_stddev_sigfig, # GeV
+                formatted_beam_energy # Gev +- keV
              ) = self.calculate_fitted_energy_stats()
             
 

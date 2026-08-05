@@ -792,7 +792,6 @@ class MainWindow(QWidget):
             verdict = False
             return verdict, error
 
-        # Assume can run, else check for errors
         is_user_beam: bool = any([
                 beam_mode == BeamMode.USER_BEAM_DECAY,
                 beam_mode == BeamMode.USER_BEAM_TOP_UP,
