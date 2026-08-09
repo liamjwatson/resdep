@@ -682,7 +682,8 @@ class MainWindow(QWidget):
 
         if self._running_experiment:
             self.repolarisation_timer.stop()
-            self.repolarisation_time_elapsed_label.setText("--> 0%")
+            self.repolarisation_time_elapsed_label.setText("")
+            self.polarisation_label.setText("-> 0%")
 
         # stop after enough time
         if self.repolarisation_time_elapsed >= 7790:
@@ -772,25 +773,26 @@ class MainWindow(QWidget):
             )
             return False, error
 
-        try:
-            recent_wiggler_ramp: bool = check_recent_wiggler_ramp()
-            if recent_wiggler_ramp:
-                error = (
-                        "Wiggler ramp initiated in the 40 minutes. "
-                        +"Require more time to repolarise / stabilise."
-                )
-                verdict = False
-                return verdict, error
-        except Exception:
-            self.logger.error(traceback.format_exc())
-            error = (
-                    "Unable to check if there was a recent wiggler ramp. "
-                    +"This is probably due to an issue with the archiver. "
-                    +"Check the GUI log (/asp/usr/data/resdep/GUI_log) "
-                    +"for more info."
-            )
-            verdict = False
-            return verdict, error
+        # NOTE: Depreciated - unreliable reporting of RAMP_STATE.
+        # try:
+        #     recent_wiggler_ramp: bool = check_recent_wiggler_ramp()
+        #     if recent_wiggler_ramp:
+        #         error = (
+        #                 "Wiggler ramp initiated in the 40 minutes. "
+        #                 +"Require more time to repolarise / stabilise."
+        #         )
+        #         verdict = False
+        #         return verdict, error
+        # except Exception:
+        #     self.logger.error(traceback.format_exc())
+        #     error = (
+        #             "Unable to check if there was a recent wiggler ramp. "
+        #             +"This is probably due to an issue with the archiver. "
+        #             +"Check the GUI log (/asp/usr/data/resdep/GUI_log) "
+        #             +"for more info."
+        #     )
+        #     verdict = False
+        #     return verdict, error
 
         is_user_beam: bool = any([
                 beam_mode == BeamMode.USER_BEAM_DECAY,

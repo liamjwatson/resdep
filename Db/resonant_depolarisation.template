@@ -166,5 +166,6 @@ record (mbbi, "$(DEVICE):RUN_INHIBIT_STATUS") {
     field (THST, "NOT_ENOUGH_CURRENT")
     field (FRST, "RECENT_WIGGLER_RAMP")
     field (FVST, "RECENT_BEAM_INJECTION")
+    field (SXST, "BEAM_NOT_POLARISED")
 }
 
