@@ -124,7 +124,7 @@ def test_collect_baseline_data(resdep_with_passing_log_data):
     # arrange
     resdep = resdep_with_passing_log_data
     # act
-    resdep._collect_baseline_data(seconds=10)
+    resdep._collect_baseline_data(duration_seconds=10)
 
     assert len(resdep.freqs) > 0
 

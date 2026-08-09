@@ -714,7 +714,8 @@ class MainWindow(QWidget):
 
         if self._running_experiment:
             self.repolarisation_timer.stop()
-            self.repolarisation_time_elapsed_label.setText("--> 0%")
+            self.repolarisation_time_elapsed_label.setText("")
+            self.polarisation_label.setText("-> 0%")
 
         # stop after enough time
         if self.repolarisation_time_elapsed >= 7790:
@@ -756,6 +757,8 @@ class MainWindow(QWidget):
                 logging.debug("beam energy txt file saved successfully.")
             else:
                 logging.debug("beam energy txt file not saved :(")
+            # save processed data
+            self.processed_data.save_data()
 
         # TODO: write to PV????
         # beam_energy_PV.put(E0_mean_sigfig)
@@ -844,14 +847,16 @@ class MainWindow(QWidget):
             )
             return False, error
 
-        recent_wiggler_ramp: bool = check_recent_wiggler_ramp()
-        if recent_wiggler_ramp:
-            error = (
-                    "Wiggler ramp initiated in the 40 minutes. "
-                    +"Require more time to repolarise / stabilise."
-            )
-            verdict = False
-            return verdict, error
+        # NOTE: This check is depreciated due to unreliable RAMP_STATUS
+        #       behaviour.
+        # recent_wiggler_ramp: bool = check_recent_wiggler_ramp()
+        # if recent_wiggler_ramp:
+        #     error = (
+        #             "Wiggler ramp initiated in the 40 minutes. "
+        #             +"Require more time to repolarise / stabilise."
+        #     )
+        #     verdict = False
+        #     return verdict, error
 
         # Assume can run, else check for errors
         is_user_beam: bool = any([

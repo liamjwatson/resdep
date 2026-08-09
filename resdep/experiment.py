@@ -753,23 +753,25 @@ class ResonantDepolarisation:
         for wiggler, pv in wiggler_PVs.items():
             if pv.connected and pv.value is not None:
                 self.wiggler_fields[wiggler] = pv.value
+        # NOTE: This check is depreciated due to unreliable RAMP_STATUS
+        #       behaviour.
         # wiggler ramp status
-        self.bioSAXS_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
-                "SR02SCU01:RAMP_STATUS", connect=True, timeout=1
-        )
-        self.IMBL_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
-                "SR08SCW01:FIELD_RAMPING_STATUS", connect=True, timeout=1
-        )
-        self.ADS_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
-                "SR10SCW01:RAMP_STATUS", connect=True, timeout=1
-        )
-        self.wiggler_ramp_staus_PVs: dict[str, epics.pv.PV] = {
-                "bioSAXS": self.bioSAXS_ramp_status_PV,
-                "IMBL": self.IMBL_ramp_status_PV,
-                "ADS": self.ADS_ramp_status_PV
-        }
-        for pv in self.wiggler_ramp_staus_PVs.values():
-            pv.add_callback(self._on_wiggler_ramp)
+        # self.bioSAXS_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+        #         "SR02SCU01:RAMP_STATUS", connect=True, timeout=1
+        # )
+        # self.IMBL_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+        #         "SR08SCW01:FIELD_RAMPING_STATUS", connect=True, timeout=1
+        # )
+        # self.ADS_ramp_status_PV: epics.pv.PV = epics.pv.get_pv(
+        #         "SR10SCW01:RAMP_STATUS", connect=True, timeout=1
+        # )
+        # self.wiggler_ramp_staus_PVs: dict[str, epics.pv.PV] = {
+        #         "bioSAXS": self.bioSAXS_ramp_status_PV,
+        #         "IMBL": self.IMBL_ramp_status_PV,
+        #         "ADS": self.ADS_ramp_status_PV
+        # }
+        # for pv in self.wiggler_ramp_staus_PVs.values():
+        #     pv.add_callback(self._on_wiggler_ramp)
 
 
         # --- SR/LCW/RF temperatures
@@ -1507,8 +1509,8 @@ class ResonantDepolarisation:
         self,
     ) -> None:
         """
-        Saves PV data to text and json files for list[float] and dict 
-        respectively. Also append endtime to metadata. 
+        Saves PV data to compressed numpy (`.npz`) and dictionaries to `.json` 
+        respectively. Also appends endtime to metadata. 
 
         Notes
         -----
@@ -1520,7 +1522,7 @@ class ResonantDepolarisation:
         2. `./data` - elsewhere
 
         *e.g.* `usr/data/2025/2025-10-20/0900h`
-        """
+        """             
 
         try:
             self.logger.info("Saving data...")
@@ -2016,18 +2018,17 @@ class ProcessedData:
         path = self.resdep.data_path / "processed_data"
         Path.mkdir(path)
 
+        np.savez_compressed(path / "freqs_array.npz", self.freqs_array)
         # loss
-        np.savetxt(path / "freqs_array.txt", self.freqs_array)
-        with open(path / "ratio_loss.json", "w") as f:
-            json.dump(self.ratio_loss, f)
+        np.savez_compressed(path / "ratio_loss.npz", **self.ratio_loss)
         # fit
-        with open(path / "y_model.json", "w") as f:
-            json.dump(self.y_model, f)
+        np.savez_compressed(path / "fit.npz", **self.y_model)
 
         # fit results
         self.fit_results += f"\n{self.formatted_beam_energy}"
         with open(path / "fit_results.txt", "w") as f:
             f.write(self.fit_results)
+
         # stats
         stats: dict[str, Union[float, None]] = {
             "E0_mean": self.E0_mean,
@@ -2038,7 +2039,7 @@ class ProcessedData:
         with open(path / "fit_stats.json", "w") as f:
             json.dump(stats, f)
 
-        resdep.logger.info("Processed data saved!")
+        self.resdep.logger.info("Processed data saved!")
 
         return None
 

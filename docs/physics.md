@@ -158,6 +158,8 @@ independently.
 
 ![BLM ADC masks](./images/BLM_ADC_masks.png "BLM ADC masks")
 
+[Libera beam loss monitor product page (i-tech)](https://www.i-tech.si/products/libera-blm/)
+
 ## Mask alignment with bunch-by-bunch
 The two ADC masks are bounded at each end by SROC. This causes a few 
 undesirable consequences. As the BLMs are evenly distributed around the ring, 
