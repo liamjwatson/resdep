@@ -51,6 +51,7 @@ from resdep.epicsBPMs import SR_BPMs, MX3_BPMs, TBPMs  # BPM subclasses
 from resdep._plotting import Plotter, StandaloneGraph
 from resdep._fitting import Fitter
 import resdep._constants as const
+from resdep._calculations import energy_calc
 from resdep._progressBars import printProgressBar
 from resdep._archiver import bioSAXSRampStatus, IMBLRampStatus, ADSRampStatus
 
@@ -155,7 +156,8 @@ class ResonantDepolarisation:
         timer_callback: Optional[Callable] = None,
         ADC_windows_callback: Optional[Callable] = None,
         results_callback: Optional[Callable] = None,
-        state_callback: Optional[Callable] = None
+        state_callback: Optional[Callable] = None,
+        processed_data_callback: Optional[Callable] = None,
     ) -> None:
         """
         Initialise default scan values.
@@ -225,9 +227,10 @@ class ResonantDepolarisation:
         self.ADC_windows_callback = ADC_windows_callback
         self.results_callback = results_callback
         self.state_callback = state_callback
-        self._abort_requested = False
+        self.processed_data_callback = processed_data_callback
 
         # --- init states
+        self._abort_requested = False
         self._injecting: bool = False
         self._measuring_SR_BPMs: bool = False
         self._measuring_TBPMs: bool = False
@@ -627,6 +630,18 @@ class ResonantDepolarisation:
             ) = fitter.automagic_fit()
             
             processed_data.save_data()
+
+            if self.processed_data_callback is not None:
+                energy_array = energy_calc(
+                        freq=processed_data.freqs_array,
+                        f_rev=self.f_rev,
+                        harmonic=self.harmonic
+                )
+                self.processed_data_callback(
+                        freqs_array=processed_data.freqs_array,
+                        energy_array=energy_array,
+                        ratio_loss=processed_data.ratio_loss
+                )
 
         # Catch something critical that `automagic_fit()` does not handle
         except Exception:
@@ -1123,10 +1138,8 @@ class ResonantDepolarisation:
                     +"Cannot decide which logic to implement."
             )
         if match_ioc is not None:
-            raise NotImplementedError(
-                    "IOC data path not configured. See _config_data_path "
-                    +"in the ResonantDepolarisation() class in "
-                    +"experiment.py of the resdep module"
+            self.data_path = Path(
+                f"/asp/usr/data/resdep/{year_str}/{date_str}/{hours_str}"
             )
         elif match_opi is not None:
             self.data_path = Path(

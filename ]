@@ -2,9 +2,7 @@
 import epics
 import time
 import datetime
-import logging
 import itertools
-from pathlib import Path
 from typing import Union, Optional, Protocol, runtime_checkable, Literal
 from enum import IntEnum
 import numpy as np
@@ -83,47 +81,12 @@ class IocApi(devsup.util.StoppableThread):
         """
         super(IocApi, self).__init__()
 
-        # --------------------------------------------------------- Logging
-        self.start_time = datetime.datetime.now()
-        date: str = self.start_time.strftime("%Y-%m-%d")
-        hours: str = self.start_time.strftime("%H%Mh")
-        seconds: str = self.start_time.strftime("%Ss")
-
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.DEBUG)
-        # create console handler with a higher log level
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        # create formatter and add it to the handlers
-        self.logger_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - [%(levelname)s] - %(message)s'
-        )
-
-        log_path = Path("asp/usr/data/resdep/IOC_API_logs/")
-        logfile_name = f"IOC_API_logfile_{date}_{hours}-{seconds}.log"
-
-        file_handler = logging.FileHandler(filename=log_path/logfile_name)
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(self.logger_formatter)
-        self.logger.addHandler(file_handler)
-        # add handler to the logger
-        console_handler.setFormatter(self.logger_formatter)
-
-        # ----------------------------------------------------------- Resdep
         self.resdep = ResonantDepolarisation(
                 progress_callback=self.emit_progress,
                 results_callback=self.emit_results,
                 state_callback=self.emit_state,
-                processed_data_callback=self.emit_processed_data,
-
-        )
-        self.experiment_thread = threading.Thread(
-                target=self.resdep.start_experiment
         )
 
-        self.logger.debug("Instantiated ResonantDepolarisation.")
-        self.logger.debug("Linked experiment to thread.")
-    
         # generate record access PVs
         PREFIX: str = "SR00RDP01"
         # ---------------------------------------------- Control
@@ -172,7 +135,6 @@ class IocApi(devsup.util.StoppableThread):
         self.run_inhibit_status_record = RecordAccess(
                 f"{PREFIX}:RUN_INHIBIT_STATUS"
         ) # Enum
-
         # ----- Processed data
         self.ratio_loss_records: dict[str, RecordAccess] = {}
         blms: list[int] = [i for i in range(1, 14+1, 1)] # 1 to 14
@@ -191,8 +153,6 @@ class IocApi(devsup.util.StoppableThread):
                 f"{PREFIX}:SWEEP_ENERGIES" 
         ) # np.ndarray
 
-        self.logger.debug("Configured local EPICS records")
-
         # ----------------------------------------------- PREDEFINED EPICS PVs
         # ----- machine state
         self.beam_mode_PV: epics.pv.PV = epics.pv.get_pv(
@@ -202,9 +162,8 @@ class IocApi(devsup.util.StoppableThread):
             pvname="SR11BCM01:24HR_CURRENT_HISTORY", connect=True, timeout=1
         )
         
-        self.logger.debug("Connected to machine state PVs")
 
-        # ----------------------------------------------------- Default values
+        # Default values
         self.run_cmd_record.value = RunCMD.NONE
         self.abort_cmd_record.value = AbortCMD.NONE
         
@@ -215,34 +174,21 @@ class IocApi(devsup.util.StoppableThread):
         self.error_msg_record.value = "None"
         self.run_inhibit_status_record.value = RunInhibitState.ABLE_TO_RUN
 
-        self.logger.debug("Set default states")
-
-        # ---------------------------------------------------- PyDevSup thread 
         devsup.hooks.addHook("AfterIocRunning", self.start)
         devsup.hooks.addHook("AfterIocExit", self.join)
-
-        self.logger.debug("Joined IOC status to API.")
-
-        self.logger.info("IOC API successfully instantiated!")
 
     def run(self) -> None:
         """
         State machine, checking for run/abort commands and experiment status.
         """
-        self.logger.debug("Entering state machine (run())")
 
         while self.shouldRun():
             if self.abort_cmd_record.value == AbortCMD.ABORT:
                 self.exec_abort_experiment()
-            elif self.run_cmd_record.value == RunCMD.RUN:
+            if self.run_cmd_record.value == RunCMD.RUN:
                 self.exec_run_experiment()
-            elif self.state_record.value == State.FINISHED:
+            if self.state_record.value == State.FINISHED:
                 self.exec_finished_experiment()
-            elif all([
-                self.scan_type_cmd_record.value == ScanType.AUTOMATIC,
-                self.state_record.value == State.READY
-                ]):
-                self.countdown_to_next_automatic_scan()
             
             self.sleep(1)
 
@@ -250,7 +196,6 @@ class IocApi(devsup.util.StoppableThread):
         """
         Sends abort request to experiment thread.
         """
-        self.logger.info("Abort command detected. Passing to resdep...")
         self.abort_cmd_record.value == AbortCMD.NONE
         self.resdep.request_abort()
         self.state_record.value == State.ABORTED
@@ -263,35 +208,27 @@ class IocApi(devsup.util.StoppableThread):
         Checks commands are appropriate (Scan type etc).
         Checks machine state (User beam mode, enough current etc)
         """
-        self.logger.info("Run command detected. Attempting to run resdep...")
 
         self.run_cmd_record.value = RunCMD.NONE
         if self.state_record.value != State.READY:
-            self.logger.warning(
-                f"ResDep is not ready (State={self.state_record.value}). "
-                +"Cancelling request to run diagnostic."
-            )
             return None
         if self.scan_type_cmd_record.value == ScanType.NONE:
-            error_msg = "No scan type selected."
-            self.logger.error(error_msg)
-            self.error_msg_record.value = error_msg
+            self.error_msg_record.value = "No scan type selected."
             return None
             
-        self.logger.debug("Checking machine state...")
         able_to_run, error = self._check_able_to_run(
                 scan_type=self.scan_type_cmd_record.value
         )
         if not able_to_run:
-            self.logger.error(error)
             self.error_msg_record.value = error
             return None
 
-        self.logger.info("Applying scan settings...")
         self.apply_scan_settings(
                 scan_type=self.scan_type_cmd_record.value
         )
-        self.logger.info("Starting experiment thread...")
+        self.experiment_thread = threading.Thread(
+                target=self.resdep.start_experiment
+        )
         self.experiment_thread.start()
         self.state_record.value == State.INITIALISING
 
@@ -306,7 +243,6 @@ class IocApi(devsup.util.StoppableThread):
         - Coundown timer to next automatic scan
         - Polarisation update every 1 Hz
         """
-        self.logger.info("Experiment finished.")
         self.experiment_finished_timestamp: datetime.datetime = (
                 datetime.datetime.now()
         )
@@ -317,6 +253,7 @@ class IocApi(devsup.util.StoppableThread):
         # This is to ensure it visually reads done even when aborted
         # mid experiment
         self.emit_progress(step=100, max_steps=100)
+        
         
         return None
 
@@ -516,7 +453,7 @@ class IocApi(devsup.util.StoppableThread):
             raise ValueError(
                     f"scan_type should be one of {ScanType.__members__}"
             )
-    # -------------------------------------------------------------------------
+
     def countdown_to_next_automatic_scan(self):
         """
         Countdown time till the next automatic scan. 
@@ -527,18 +464,10 @@ class IocApi(devsup.util.StoppableThread):
                 now - self.experiment_finished_timestamp
         ).total_seconds()
 
-        if elapsed_time_seconds < 0: # is negative
-            raise ValueError(
-                "Elapsed time since last automatic scan should always "
-                +"be a positive number. Check implementation of "
-                +"IocApi.expoeriment_finished_timestamp."
-        )
-        remaining_time_seconds: int = int(
+        remaining_time_seconds: float = (
             self.automatic_scan_delay_hours_record.value*3600 
             - elapsed_time_seconds
         )
-        if remaining_time_seconds < 0:
-            remaining_time_seconds = 0 # nice EPICS reporting
 
         self.automatic_scan_countdown_seconds.value = remaining_time_seconds
 
@@ -555,9 +484,6 @@ class IocApi(devsup.util.StoppableThread):
 
     def emit_state(self, state: State) -> None:
         self.state_record.value = state
-        self.logger.debug(
-                f"Experiment state ({state.name}) pushed to EPICS." 
-        )
         return None
 
     def emit_results(
@@ -576,8 +502,6 @@ class IocApi(devsup.util.StoppableThread):
         self.beam_energy_twostd_record.value = E0_stddev_sigfig
         self.beam_energy_formatted_record.value = formatted_beam_energy
 
-        self.logger.debug("Diagnostic results pushed to EPICS.")
-
         return None
 
     def emit_processed_data(
@@ -595,8 +519,6 @@ class IocApi(devsup.util.StoppableThread):
                 self.ratio_loss_records.values()
             ):
             record.value = loss
-
-        self.logger.debug("Processed data pushed to EPICS.")
 
         return None
 

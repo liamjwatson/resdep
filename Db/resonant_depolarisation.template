@@ -32,7 +32,11 @@
 # up again, but this would mean connecting to PVs every time. The class can 
 # easily sit idle and wait for a subsequent call to start_experiment(). 
 # The PV connections are cached.
-#
+# 
+# From template parameters
+# DEVICE - Normal resdep PV prefix: e.g. SR00RDP01
+# BLM  - beam loss monitor identifier, e.g. BLM04
+# CHANNEL - channel, i.e. A or B
 #
 # Template formal macro parameters:
 # NAME    - record/device name prefix, e.g. SR11BCM01
@@ -93,44 +97,63 @@ record (mbbo, "$(DEVICE):SCAN_TYPE_CMD") {
     field (THST, "WIDE")
 }
 
+record (ao, "$(DEVICE):AUTOMATIC_SCAN_DELAY") {
+    field (DESC, "Delay between automatic scans")
+    field (SCAN, "Passive")
+    field (PREC, "1")
+    field (EGU, "hours")
+    field (ADEL, "0.9")
+    field (MDEL, "0.9")
+}
+
+
 # -------------------------------------------------------------------- Feedback
 
 # ----- Results
 record (ai, "$(DEVICE):BEAM_ENERGY") {
-    field(DESC, "Resonant depolarisation beam energy measurement")
+    field (DESC, "Resonant depolarisation beam energy measurement")
     field (SCAN, "Passive")
-    field(PREC, "6")
-    field(EGU, "GeV")
+    field (PREC, "6")
+    field (EGU, "GeV")
 }
 
 record (ai, "$(DEVICE):BEAM_ENERGY_TWOSTD") {
-    field(DESC, "ResDep beam energy error to two standard deviations")
+    field (DESC, "ResDep beam energy error to two standard deviations")
     field (SCAN, "Passive")
-    field(PREC, "6")
-    field(EGU, "GeV")
+    field (PREC, "6")
+    field (EGU, "GeV")
 }
 
 # Example: "3.03138 GeV ± 10 keV"
 record (stringin, "(DEVICE):BEAM_ENERGY_FORMATTED") {
-    field(DESC, "Formatted beam energy string")
+    field (DESC, "Formatted beam energy string")
 }
 
 record (ai, "$(DEVICE):PROGRESS") {
-    field(DESC, "Resonant depolarisation progress")
+    field (DESC, "Resonant depolarisation progress")
     field (SCAN, "Passive")
-    field(PREC, "1")
-    field(EGU, "%")
-    field(ADEL, "0.9")
-    field(MDEL, "0.9")
+    field (PREC, "1")
+    field (EGU, "%")
+    field (ADEL, "0.9")
+    field (MDEL, "0.9")
 }
 
 record (ai, "$(DEVICE):ESTIMATED_POLARISATION") {
-    field(DESC, "Estimate of beam polarisation")
+    field (DESC, "Estimate of beam polarisation")
     field (SCAN, "Passive")
-    field(PREC, "3")
-    field(EGU, "%")
-    field(ADEL, "0.9")
-    field(MDEL, "0.9")
+    field (PREC, "3")
+    field (EGU, "%")
+    field (ADEL, "0.9")
+    field (MDEL, "0.9")
+}
+
+record (ai, "$(DEVICE):AUTOMATIC_SCAN_COUNTDOWN") {
+    field (DESC, "Countdown to next ResDep scan")
+    field (SCAN, "Passive")
+    field (PREC, "3")
+    field (EGU, "seconds")
+    field (ADEL, "0.9")
+    field (MDEL, "0.9")
 }
 
 # ---- Diagnostics
@@ -142,19 +165,6 @@ record (mbbi, "$(DEVICE):STATE") {
     field (TWST, "INITIALISING")
     field (THST, "RUNNING")
     field (FRST, "FINISHED")
-}
-
-record (stringin, "(DEVICE):ERROR_MSG") {
-    field(DESC, "Detailied error test")
-}
-
-record (mbbi, "$(DEVICE):SCAN_TYPE") {
-    field (DESC, "ResDep requested scan type")
-    field (SCAN, "Passive")
-    field (ZRST, "NONE")
-    field (ONST, "AUTOMATIC")
-    field (TWST, "NORMAL")
-    field (THST, "WIDE")
 }
 
 record (mbbi, "$(DEVICE):RUN_INHIBIT_STATUS") {
@@ -169,3 +179,51 @@ record (mbbi, "$(DEVICE):RUN_INHIBIT_STATUS") {
     field (SXST, "BEAM_NOT_POLARISED")
 }
 
+record (mbbi, "$(DEVICE):SCAN_TYPE") {
+    field (DESC, "ResDep scan type")
+    field (SCAN, "Passive")
+    field (ZRST, "NONE")
+    field (ONST, "AUTOMATIC")
+    field (TWST, "NORMAL")
+    field (THST, "WIDE")
+}
+
+record (stringin, "(DEVICE):ERROR_MSG") {
+    field (DESC, "Detailied error test")
+}
+
+
+# ------ Processed data
+# e.g. SR00RDP01:BLM04_B_BEAM_LOSS_RATIO
+record (waveform, "$(DEVICE):$(BLM)_$(CHANNEL)_BEAM_LOSS_RATIO") {
+    field (DESC, "Normalised ratio of beam loss over split ADC windows")
+    field (SCAN, "Passive")
+    field (FTVL, "DOUBLE")
+    field (NELM, "19195")
+    field (EGU,  "")
+    field (PREC, "3")
+    field (LOPR, "0.0")
+    field (HOPR, "10.0")
+}
+
+record (waveform, "$(DEVICE):SWEEP_FREQUENCIES") {
+    field (DESC, "ResDep frequency sweep")
+    field (SCAN, "Passive")
+    field (FTVL, "DOUBLE")
+    field (NELM, "19195")
+    field (EGU,  "kHz")
+    field (PREC, "3")
+    field (LOPR, "0.0")
+    field (HOPR, "10.0")
+}
+
+record (waveform, "$(DEVICE):SWEEP_ENERGIES") {
+    field (DESC, "ResDep energy sweep")
+    field (SCAN, "Passive")
+    field (FTVL, "DOUBLE")
+    field (NELM, "19195")
+    field (EGU,  "GeV")
+    field (PREC, "3")
+    field (LOPR, "0.0")
+    field (HOPR, "10.0")
+}

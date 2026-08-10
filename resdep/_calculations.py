@@ -25,9 +25,13 @@ def energy_calc(
 def energy_calc(
     freq: float, f_rev: float, harmonic: int
     ) -> float: ...
+@overload
 def energy_calc(
-    freq: Union[float, np.floating], f_rev: float, harmonic: int
-) -> Union[float, np.floating]:
+    freq: np.ndarray, f_rev: float, harmonic: int
+) -> np.ndarray: ...
+def energy_calc(
+    freq: Union[float, np.floating, np.ndarray], f_rev: float, harmonic: int
+) -> Union[float, np.floating, np.ndarray]:
     """                                                         
     Frequency (kHz) -> energy (GeV) conversion
 
