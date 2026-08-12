@@ -6,10 +6,11 @@ A simple graphical user interface (GUI) for use during user beam before there is
 
 The abort button on the control panel sends a fail-safe abort request to the threaded resdep worker. Depending on the status or progress of the experiment, the abort request may not be executed immediately. The status bar should provide more info on the pending abort.
 
+---
 ## Automatic scans
 When enabled, resdep experiments will run (by default unless specified) every hour after the previous has finished (approx. every 1.5 hours). When first switching to enable, an experiment will try to run immediately.
 
-Every time an automatic scan is triggered, it will first check *if* it can run. The current requirements are:
+Every time an automatic scan is triggered, it will first check *if* it can run. The current requirements are: (see [decision tree](../../code_base/workflow/check_able_to_run_workflow))
 
 - Machine in 'user beam' mode
 - \> 150 mA beam current
@@ -19,6 +20,7 @@ Every time an automatic scan is triggered, it will first check *if* it can run. 
 If the automatic scan *cannot* run, it starts a timer for an hour (or specified time between scans) and then checks again. The minimum time between scans is 39 minutes which is exactly how long it takes to build up 95% polarisation from a unpolarised beam.
 
 The experiment parameters for the automatic scans are:
+
 - Kicker strength = 50%
 - Energy bounds = 0.05 % (3.0300 to 3.0325 GeV)
 - Fractional spin tune = 0.879
@@ -28,6 +30,7 @@ The experiment parameters for the automatic scans are:
 - Sweep step size = 0.5 Hz
 - PV log frequency = 10 Hz
 
+---
 ## Manual scans
 ### Normal scan
 Uses the same default settings for the experiment as the automatic scans, but can be manually triggered.
@@ -36,5 +39,6 @@ Uses the same default settings for the experiment as the automatic scans, but ca
 Is used when there are strange issues with the machine and it is suspected that the beam energy has drifted significantly. Is not intended to be used routinely.
 
 Has an increased frequency (energy) range of 0.35% [3.02 GeV to 3.04 GeV] over which it scans. Takes approximately 2 hours to complete. Warns the user that they may drive betatron tunes ***if*** they have drifted from their typical values. Dangerous tune range:
+
 - $\nu_y = [0.097, 0.145]$, and
 - $\nu_y = [0.855, 0.903]$

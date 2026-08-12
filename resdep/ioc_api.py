@@ -115,7 +115,6 @@ class IocApi(devsup.util.StoppableThread):
                 results_callback=self.emit_results,
                 state_callback=self.emit_state,
                 processed_data_callback=self.emit_processed_data,
-
         )
         self.experiment_thread = threading.Thread(
                 target=self.resdep.start_experiment
@@ -207,9 +206,11 @@ class IocApi(devsup.util.StoppableThread):
         # ----------------------------------------------------- Default values
         self.run_cmd_record.value = RunCMD.NONE
         self.abort_cmd_record.value = AbortCMD.NONE
+        self.automatic_scan_delay_hours_record.value = 2.00 # hours
         
         self.progress_record.value = 0
-        self.estimated_polarisation_record.value = 100 # %
+        self.polarisation = 100 # %
+        self.estimated_polarisation_record.value = self.polarisation # %
 
         self.state_record.value = State.READY
         self.error_msg_record.value = "None"
@@ -232,19 +233,26 @@ class IocApi(devsup.util.StoppableThread):
         self.logger.debug("Entering state machine (run())")
 
         while self.shouldRun():
+            # check, and then run
             if self.abort_cmd_record.value == AbortCMD.ABORT:
                 self.exec_abort_experiment()
             elif self.run_cmd_record.value == RunCMD.RUN:
                 self.exec_run_experiment()
             elif self.state_record.value == State.FINISHED:
-                self.exec_finished_experiment()
+                self._exec_finished_experiment()
             elif all([
                 self.scan_type_cmd_record.value == ScanType.AUTOMATIC,
                 self.state_record.value == State.READY
                 ]):
-                self.countdown_to_next_automatic_scan()
+                self._countdown_to_next_automatic_scan()
+
+            # run always
+            if self.resdep.completed_successfully:
+                self._calculate_polarisation()
+
             
             self.sleep(1)
+
 
     def exec_abort_experiment(self) -> None:
         """
@@ -297,7 +305,7 @@ class IocApi(devsup.util.StoppableThread):
 
         return None
 
-    def exec_finished_experiment(self) -> None:
+    def _exec_finished_experiment(self) -> None:
         """
         Cleanup tasks on experiment finish.
         
@@ -317,6 +325,9 @@ class IocApi(devsup.util.StoppableThread):
         # This is to ensure it visually reads done even when aborted
         # mid experiment
         self.emit_progress(step=100, max_steps=100)
+
+        if self.resdep.completed_successfully:
+            self.polarisation = 0 # %
         
         return None
 
@@ -427,16 +438,6 @@ class IocApi(devsup.util.StoppableThread):
         #     verdict = False
         #     return verdict, error
 
-        is_user_beam: bool = any([
-                beam_mode == BeamMode.USER_BEAM_DECAY,
-                beam_mode == BeamMode.USER_BEAM_TOP_UP,
-                beam_mode == BeamMode.USER_BEAM_EXOTIC
-        ])
-
-        if scan_type == ScanType.AUTOMATIC:
-            scan_type_allowed: bool = is_user_beam
-        elif scan_type == ScanType.NORMAL or scan_type == ScanType.WIDE:
-            scan_type_allowed: bool = True # manual scans can run anytime
 
         # ignore statement here because cant type hint array size / shape
         beam_current: np.float64 = current_history_24h[:-1] #ty: ignore[invalid-assignment]
@@ -460,17 +461,8 @@ class IocApi(devsup.util.StoppableThread):
             error = "Recent beam injection (or low current) detected. "
             verdict = False
             return verdict, error
-        else:
-            recent_beam_injection: bool = False
 
-        if all([
-                scan_type_allowed,
-                not recent_beam_injection,
-                self.estimated_polarisation_record.value >= 95, # %
-            ]):
-            self.run_inhibit_status_record.value = RunInhibitState.ABLE_TO_RUN
-            verdict = True
-        elif self.estimated_polarisation_record.value < 95: # %
+        if self.estimated_polarisation_record.value < 95: # %
             error = (
                 "Beam polarisation is less than 95%; not enough resolution. "
                 + "Aborting request to run resdep."
@@ -480,7 +472,14 @@ class IocApi(devsup.util.StoppableThread):
             )
             verdict = False
             return verdict, error
-        elif all([
+
+        is_user_beam: bool = any([
+                beam_mode == BeamMode.USER_BEAM_DECAY,
+                beam_mode == BeamMode.USER_BEAM_TOP_UP,
+                beam_mode == BeamMode.USER_BEAM_EXOTIC
+        ])
+
+        if all([
                 scan_type == ScanType.AUTOMATIC,
                 not is_user_beam,
             ]):  # tried automatic scan but not user beam
@@ -492,6 +491,14 @@ class IocApi(devsup.util.StoppableThread):
             verdict = False
             return verdict, error
 
+        if scan_type == ScanType.AUTOMATIC:
+            scan_type_allowed: bool = is_user_beam
+        elif scan_type == ScanType.NORMAL or scan_type == ScanType.WIDE:
+            scan_type_allowed: bool = True # manual scans can run anytime
+
+        if scan_type_allowed:
+            self.run_inhibit_status_record.value = RunInhibitState.ABLE_TO_RUN
+            verdict = True
 
         return verdict, error
 
@@ -517,7 +524,7 @@ class IocApi(devsup.util.StoppableThread):
                     f"scan_type should be one of {ScanType.__members__}"
             )
     # -------------------------------------------------------------------------
-    def countdown_to_next_automatic_scan(self):
+    def _countdown_to_next_automatic_scan(self):
         """
         Countdown time till the next automatic scan. 
         Initiate a scan (by flipping a state CMD) once timer hits 0
@@ -544,6 +551,43 @@ class IocApi(devsup.util.StoppableThread):
 
         if remaining_time_seconds <= 0:
             self.run_cmd_record.value = RunCMD.RUN
+
+        return None
+
+    # -------------------------------------------------------------------------
+    def _calculate_polarisation(self):
+        """
+        Calculate an estimate of the beam polarisation after a successful 
+        diagnostic run and push it to EPICS.
+
+        After an hour, set polarisation to 100% and stop calculating.
+        """
+        
+        if self.polarisation == 100: # %
+            return None
+
+        now: datetime.datetime = datetime.datetime.now()
+        elapsed_time_seconds: float = (
+                now - self.experiment_finished_timestamp
+        ).total_seconds()
+
+        if elapsed_time_seconds < 0: # is negative
+            raise ValueError(
+                "Elapsed time since last automatic scan should always "
+                +"be a positive number. Check implementation of "
+                +"IocApi.expoeriment_finished_timestamp."
+        )
+
+        if elapsed_time_seconds < 3600:
+            self.polarisation: float = 100 * (
+                    1 - np.exp(-elapsed_time_seconds / 779)
+            ) # %
+        else: 
+            # After an hour, assume the beam is fully polarised and stop 
+            # performing calculation
+            self.polarisation = 100
+
+        self.estimated_polarisation_record.value = self.polarisation
 
         return None
 

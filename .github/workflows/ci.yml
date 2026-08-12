@@ -4,7 +4,8 @@ on:
     branches:
       - master 
       - main
-      - develop # ! <------------ REMOVE THIS FOR PRODUCTION
+      - develop 
+      - kubili-refactor 
 permissions:
   contents: write
 env:

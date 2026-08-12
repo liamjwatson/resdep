@@ -230,7 +230,8 @@ class ResonantDepolarisation:
         self.processed_data_callback = processed_data_callback
 
         # --- init states
-        self._abort_requested = False
+        self.completed_successfully: bool = False
+        self._abort_requested: bool = False
         self._injecting: bool = False
         self._measuring_SR_BPMs: bool = False
         self._measuring_TBPMs: bool = False
@@ -334,6 +335,7 @@ class ResonantDepolarisation:
 
         self.state = State.INITIALISING
         self._has_stored_data: bool = False
+        self.completed_successfully: bool = False
 
         try:  # if any of this fails then the experiment should shutdown
 
@@ -369,6 +371,8 @@ class ResonantDepolarisation:
             if self.state_callback is not None:
                 self.state_callback(state=self.state)
             self._depolarise()
+
+            self.completed_successfully = True
 
         except Exception:
             self.logger.error(traceback.format_exc())

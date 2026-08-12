@@ -185,4 +185,28 @@ and calculate the offset between the two systems.
 ---------------
 # Data analysis
 
+![Example dataset](./images/example_dataset.png "Example resonant depolarisation processed and fit dataset")
+
 ## Step-edge detection
+The step-like loss pattern that indicates crossing the depolarisation resonance 
+is non-trivial to isolate due to the SNR and slope / linear component in the 
+data sets. Using a standard kicker strength (50%) and sweep rate (5 Hz/s), the 
+width of the step becomes consistent.
+
+Taking the derivative of the step-loss over a moving window equal to the 
+typical step width produces a mostly flat curve with a peak around the step 
+location with good consistency.
+
+Use of different kicker strengths and sweep rates should be used with caution. 
+There is in-built prediction of the change to the step width, but may not work 
+at the parameter extrema.
+
+## Curve fitting
+The data is best fit with a sigmoid function - the sum of a 
+[cumulative distribution function](https://en.wikipedia.org/wiki/Cumulative_distribution_function) 
+and a linear slope. The diagnostic calculates the 
+goodness of fit $(R^2)$ and only accepts results above a threshold.
+
+The fitting stats are reported, and typically results in errors of 10 keV 
+$(1 \times 10^{-5} \text{ GeV})$, although the diagnostic can achieve precision 
+of 1 keV $(1 \times 10^{-6} \text{ GeV})$.

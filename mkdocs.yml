@@ -97,6 +97,9 @@ nav:
     - code_base/index.md
     - Workflow:
       - code_base/workflow/index.md
+      - code_base/workflow/experiment_workflow.md
+      - code_base/workflow/ioc_api_workflow.md
+      - code_base/workflow/check_able_to_run_workflow.md
     - Resonant Depolarisation: code_base/resdep.md
     - GUIs:
       - code_base/GUIs/index.md

@@ -1,7 +1,7 @@
-# Overview
+# Resonant depolarisation experiment
 ```mermaid
 graph TB
-    A(("Trigger experiment")) --> B["Check machine state"];
+    A(("Trigger experiment")) --> B{"Check machine state"};
     B --->|"good"| D["Initiate experiment"];
     C ---->|"end"| A;
     D --> E["Calculate revolution frequency from RF <br> Calculate sweep range <br> Load PVs"];

@@ -3,7 +3,10 @@ Step-by-step explanation of how the resonant depolarisation runs, which
 functions are called and in what order.
 
 ## [GUIs](./GUIs/index.md)
-Graphical user interfaces (GUIs) written in Qt (but which are not Kubili - see `$LINK_TO_DOCS` for specific documentation.)
+Graphical user interfaces (GUIs) written in Qt 
+(but which are not Kubili - see 
+[SOP](https://confluence.synchrotron.org.au/confluence/pages/viewpage.action?pageId=444268831)
+for control.)
 
 Two options
 - [`simpleGUI`](./GUIs/simpleGUI.md): standard operation

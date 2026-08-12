@@ -48,9 +48,11 @@ pip install $WHEEL_FILE_NAME.whl --find-links ./ --no-index --no-deps
 ```
 
 ## Usage
-- **Kubili**: standard operation, see $URL_TO_CONFLUENCE_PAGE
-- `simpleGUI`: for general / routine measurements (contains lots of checks to not disturb normal operator and use beam operations)  
-- `resdepGUI`: for machine studies 
+- **Kubili**: In progress. See [JIRA ticket](https://jira.synchrotron.org.au/browse/ACC-1850).
+- [`simpleGUI`](./user_guide/simpleGUI.md): 
+for general / routine measurements (contains lots of checks to not disturb 
+normal operator and use beam operations)  
+- [`resdepGUI`](./user_guide/resdepGUI.md): expert level GUI, for machine studies 
 
 run in **python**: 
 
