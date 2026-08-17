@@ -1,7 +1,0 @@
-# Overview
-`resdep` is a diagnostic tool to non-destructively measure the energy of the 
-stored beam. For most use cases, this diagnostic simply runs in the background 
-and periodically measures the beam energy, intelligently decided when to run 
-and when to switch off. For this purpose, the [`Kubili`](kubili.md) or 
-[`simpleGUI`](simpleGUI.md) are most appropriate points of control. 
-

@@ -1565,7 +1565,8 @@ class ResonantDepolarisation:
             )
 
         self.logger.debug(
-            "Calculated adc_counter windows, format: [offset_1, window_1, offset_2, window_2]"
+            "Calculated adc_counter windows, "
+            +"format: [offset_1, window_1, offset_2, window_2]"
         )
         self.logger.debug(adc_counter_windows)
         self.logger.debug("Corresponding _depolarised bunches for BbB:")

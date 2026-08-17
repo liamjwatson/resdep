@@ -64,12 +64,38 @@ class MockBLMs():
     """
     Mock beam loss monitor(s)
     """
-    # states
-    sectors_connected = [sector for sector in range(14)]
-    # PV
-    loss_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
-    adc_counter_loss_1_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
-    adc_counter_loss_2_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
+    def __init__(self):
+        # states
+        self.sectors_connected = [sector for sector in range(14)]
+
+    def get_loss_PVs(self):
+        # PV
+        self.loss_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
+        self.adc_counter_loss_1_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
+        self.adc_counter_loss_2_PV: dict[str, MockPV] = {"mock_PV": MockPV()}
+
+        integrated_buffer_loss: np.ndarray = np.ones(86)
+        # create empty buckets
+        integrated_buffer_loss[-7:] = 0
+        self.integrated_buffer_loss_PV: dict[str, MockPV] = {}
+        for sector, section in itertools.product(range(1, 14+1, 1), ["A", "B"]):
+            self.integrated_buffer_loss_PV[f"{sector}{section}"] = ( 
+                MockPV(get_values=integrated_buffer_loss)
+            )
+
+    def get_t2_trigger_delays(self):
+        default_t2_trigger_delays: list[int] = [
+                delay.value for delay in DefaultT2TriggerDelays
+        ]
+        self.t2_trigger_delays_PV: dict[str, MockPV] = {}
+        self.init_t2_trigger_delays: dict[str, float] = {}
+
+        for index, sector in enumerate(range(1, 14+1, 1)):
+            delay = default_t2_trigger_delays[index]
+            self.t2_trigger_delays_PV[f"{sector}"] = MockPV(get_values=delay)
+            self.init_t2_trigger_delays[f"{sector}"] = delay
+            
+
 
 @pytest.fixture
 def mock_pv(monkeypatch):
@@ -88,7 +114,7 @@ def resdep_cls():
     return ResonantDepolarisation()
 
 @pytest.fixture
-def resdep_with_passing_log_data(resdep_cls):
+def mock_resdep(resdep_cls):
     """
     ResonantDepolarisation configured with PVs that will nicely pass through 
     ResonantDepolarisation._log_data(), not throw an error or an abort request.
@@ -102,6 +128,7 @@ def resdep_with_passing_log_data(resdep_cls):
     setattr(resdep_cls, "pattern_PV", MockPV(get_values="1:360"))
     setattr(resdep_cls, "dcct", MockPV(get_values=200)) # mA
     setattr(resdep_cls, "blm", MockBLMs())
+    resdep_cls.blm.get_loss_PVs()
     # --------------------------------------------------- experiment variables
     setattr(resdep_cls, "log_frequency", 1) # Hz
     setattr(resdep_cls, "set_sweep_freq", 1225) # kHz
@@ -150,10 +177,10 @@ def test_config_data_path(resdep_cls):
 # ---- This test needs extra config, since we load the PV in the function
 # ---- Needs a custom PV class with a pvname flag for masterRF
 # def test_calc_revolution_frequency_from_master_RF(
-#         resdep_with_passing_log_data
+#         mock_resdep
 #     ):
 #     # arange
-#     resdep = resdep_with_passing_log_data
+#     resdep = mock_resdep
 #     f_rev_expected: float = (
 #         1e-3 * resdep.masterRF_PV.value / 360
 #     )
@@ -169,7 +196,7 @@ def test_config_data_path(resdep_cls):
 
 def test_load_PVs(
         mock_pv,
-        resdep_with_passing_log_data
+        mock_resdep
     ):
     """
     Smoke test for now (no assertions, just making sure it throws no 
@@ -177,7 +204,7 @@ def test_load_PVs(
     Should improve when I understand more about pytest implementation.
     """
     # arange
-    resdep = resdep_with_passing_log_data 
+    resdep = mock_resdep 
     # monkeypatch.setattr(resdep.epicsBLMs, "BLMs", MockBLMs)
 
     # act
@@ -188,13 +215,13 @@ def test_load_PVs(
 def test_calculate_adc_counter_windows(
         monkeypatch,
         mock_pv,
-        resdep_with_passing_log_data
+        mock_resdep
         ):
     """
     Force test to look at sector 1, and only populate those attributes.
     """
     # arange
-    resdep = resdep_with_passing_log_data
+    resdep = mock_resdep
     resdep.blm.init_sumdec_periods = {
         "1": 50
     }
@@ -216,7 +243,7 @@ def test_calculate_adc_counter_windows(
         if pvname in TIME_ALIGNMENT_PV_NAMES:
             if any([
                 pvname == "IGPF:X:SRAM:MEAN", 
-                pvname == "IGPF:X:SRAM:MEAN"
+                pvname == "IGPF:Y:SRAM:MEAN"
             ]):
                 # create fake fill pattern
                 # x & y are the same
@@ -256,17 +283,22 @@ def test_calculate_adc_counter_windows(
 
     resdep.blm.get_loss_PVs()
 
-    
+    resdep.blm.get_t2_trigger_delays()
+
     # act 
     resdep.calculate_adc_counter_windows(sector = 1)
 
     # assert
-    assert resdep.set_drive_pattern == "150:360"
+    assert resdep.set_drive_pattern == "11:308"
+    assert resdep.set_adc_counter_offset_1 == 0
+    assert resdep.set_adc_counter_window_1 == 71
+    assert resdep.set_adc_counter_offset_2 == 71
+    assert resdep.set_adc_counter_window_2 == 15
     
 
-def test_log_data(resdep_with_passing_log_data):
+def test_log_data(mock_resdep):
     # arrange
-    resdep = resdep_with_passing_log_data
+    resdep = mock_resdep
     # act
     resdep._log_data()
 
@@ -274,9 +306,9 @@ def test_log_data(resdep_with_passing_log_data):
     print(f"freqs len={len(resdep.freqs)}")
     assert len(resdep.freqs) == 1
 
-def test_collect_baseline_data(resdep_with_passing_log_data):
+def test_collect_baseline_data(mock_resdep):
     # arrange
-    resdep = resdep_with_passing_log_data
+    resdep = mock_resdep
     # act
     resdep._collect_baseline_data(duration_seconds=3)
 
