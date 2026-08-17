@@ -455,7 +455,7 @@ class Fitter:
     # -------------------------------------------------------------------------
     def find_step_change_in_beam_loss(
         self,
-        ) -> tuple[np.floating, npt.NDArray[np.bool]]:
+        ) -> tuple[np.floating, npt.NDArray[np.bool_]]:
         """
         Best guess for step change in beam loss 
         from a known resonance width in standard conditions:
