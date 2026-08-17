@@ -1,3 +1,6 @@
+## [Architecture](./architecture.md)
+Arhitecture of the `resdep` software package. How each module fits in to 
+each other.
 ## [Workflow](./workflow/index.md)
 Step-by-step explanation of how the resonant depolarisation runs, which 
 functions are called and in what order.
@@ -24,3 +27,6 @@ Helper classes for the resonant depolarisation experiment (
 Classes that can be easily used as-is, applied to new projects without 
 modification, and are written in a easily extensible way to add new functions 
 or subclasses. 
+
+## [IOC](./IOC/index.md)
+IOC functionality (API, EPICS record access etc)

@@ -95,6 +95,7 @@ nav:
   - Physics: physics.md
   - Code base:
     - code_base/index.md
+    - code_base/architecture.md
     - Workflow:
       - code_base/workflow/index.md
       - code_base/workflow/experiment_workflow.md
@@ -116,6 +117,10 @@ nav:
       - code_base/extensible_classes/index.md
       - Beam position monitors: code_base/extensible_classes/epicsBPMs.md
       - Beam loss monitors: code_base/extensible_classes/epicsBLMs.md
+    - IOC:
+      - code_base/IOC/index.md
+      - IOC API: code_base/IOC/ioc_api.md
+      - Record Access: code_base/IOC/record_access.md
   - Contributing: CONTRIBUTING.md
 
 markdown_extensions:
