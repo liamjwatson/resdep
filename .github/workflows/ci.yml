@@ -2,7 +2,7 @@ name: ci
 on:
   push:
     branches:
-      - kubili-refactor 
+      - kubili-refactor # latest version, should be referenced by controls
 permissions:
   contents: write
 env:

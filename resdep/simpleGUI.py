@@ -449,23 +449,32 @@ class MainWindow(QWidget):
         self.logger: logging.Logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
 
-        # create file handler which logs even debug messages
-        file_handler = logging.FileHandler(
-                filename=self.logfile_path/filename
-        )
-        file_handler.setLevel(logging.DEBUG)
-        # create console handler with a higher log level
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
         # create formatter and add it to the handlers
         formatter = logging.Formatter(
                 '%(asctime)s - %(name)s - [%(levelname)s] - %(message)s'
         )
-        file_handler.setFormatter(formatter)
+        # create console handler with a higher log level
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(formatter)
         # add the handlers to logger
-        self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
+
+        # create file handler which logs even debug messages
+        try:
+            file_handler = logging.FileHandler(
+                    filename=self.logfile_path/filename
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+        except PermissionError as e:
+            raise PermissionError(
+                "You do not have write permissions into /asp/usr/data "
+                +"(or local ./data). "
+                +"Try running the GUI from a different dir or PC where you "
+                +"have elevated permissions."
+                ) from e
 
         self.logger.debug(self.start_time)
         self.logger.debug("--- simpleGUI starting up ---")
@@ -501,15 +510,16 @@ class MainWindow(QWidget):
     def _enable_control_panel(self, enable: bool = True) -> None:
         self.button_manual_normal_scan.setEnabled(enable)
         self.button_manual_wide_search.setEnabled(enable)
-        # if you run a manual scan, the automatic button will be disabled.
-        # but this function will always enable/re-enable it if enable==True
-        if not self._automatic_scan_enabled and enable == False:
+        # only affects the automatic button if its toggled OFF 
+        if self.button_automatic.isChecked():
+            pass
+        else:
             self.button_automatic.setEnabled(enable)
         self.checkbox_machine_studies.setEnabled(enable)
         self.checkbox_machine_state_override.setEnabled(enable)
         return None
-    def _disable_control_panel(self) -> None:
     #--------------------------------------------------------------------------
+    def _disable_control_panel(self) -> None:
         self._enable_control_panel(enable=False)
         return None
     # *--------------------------------* #
@@ -971,6 +981,8 @@ class MainWindow(QWidget):
             )
             self._on_status_update("Waiting for next automatic scan...")
             self._automatic_scan_enabled = True
+            self._apply_default_scan_settings()
+            self._disable_control_panel()
             self.automatic_scan()
 
         else:  # if unchecked (i.e. clicked to diable automatic scans)
@@ -979,6 +991,7 @@ class MainWindow(QWidget):
                 "QPushButton {background-color: none;}"
             )
             self._automatic_scan_enabled = False
+            self._enable_control_panel()
             if self._running_experiment:
                 answer = QMessageBox.question(
                     self,

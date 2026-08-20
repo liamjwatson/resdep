@@ -256,6 +256,7 @@ class Fitter:
     def fit_sigmoid(
             self,
             step_location: Optional[Union[float, np.floating]] = None,
+            r2_threshold: Optional[float] = None,
         ) -> tuple[
             dict[str, npt.NDArray[np.floating]],
             dict[str, float],
@@ -327,7 +328,10 @@ class Fitter:
                 # r-squared
                 r2 = 1 - (ss_res / ss_tot)
 
-                R2_LOWER_BOUND = 0.90
+                if r2_threshold is not None:
+                    R2_LOWER_BOUND = r2_threshold
+                else:
+                    R2_LOWER_BOUND = 0.90
                 if r2 < R2_LOWER_BOUND:  # poor fit
                     logging.warning(
                         f"Poor fit in sector {sector}, " 
@@ -350,6 +354,8 @@ class Fitter:
                         + f"E0={mean_energy:0.5f} GeV, " 
                         + f"r^2={r2:0.2f}\n"
                     )
+                    self.processed_data._poor_fit[key] = False
+
 
             except RuntimeError:
                 logging.error(traceback.format_exc())

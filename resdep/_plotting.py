@@ -142,12 +142,17 @@ class Plotter:
         """
         try:
             x = self.processed_data.freqs_array
-            for index, (sector, loss) in enumerate(
-                    self.processed_data.ratio_loss.items()
-                ):
-                y = loss
+            for index, sector in enumerate(self.processed_data.sectors_to_fit):
+                y = self.processed_data.ratio_loss[f"{sector}B"]
                 vertical_offset = index * self.OFFSET_SCALING_FACTOR
                 self.graph.axes.plot(x, y + vertical_offset, label=sector)
+
+            # for index, (sector, loss) in enumerate(
+            #         self.processed_data.ratio_loss.items()
+            #     ):
+            #     y = loss
+            #     vertical_offset = index * self.OFFSET_SCALING_FACTOR
+            #     self.graph.axes.plot(x, y + vertical_offset, label=sector)
 
             self.graph.axes.legend(
                 loc="center left", ncol=1, reverse=True
