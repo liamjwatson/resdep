@@ -291,22 +291,37 @@ class MainWindow(QWidget):
         self.button_do_fit = QPushButton("Do fit")
         self.button_do_fit.setEnabled(False)
         self.sigma = QSpinBox(minimum=1, maximum=100, value=10)
-        self.sigma.setEnabled(False)
+        self.sigma.setEnabled(True)
 
         # separate layout for sector checkboxes
         checkbox_pane = QWidget(self)
-        checkbox_layout = QHBoxLayout()
+        checkbox_layout = QVBoxLayout()
+        checkbox_row_1_layout = QHBoxLayout()
+        checkbox_row_2_layout = QHBoxLayout()
+        checkbox_row_3_layout = QHBoxLayout()
+        checkbox_layout.addLayout(checkbox_row_1_layout)
+        checkbox_layout.addLayout(checkbox_row_2_layout)
+        checkbox_layout.addLayout(checkbox_row_3_layout)
         checkbox_pane.setLayout(checkbox_layout)
-        self.sectors: list[int] = [1, 4, 8, 11, 12, 13]
-        self.sector_checkboxes = [
+        self.sectors: list[int] = [sector for sector in range(1, 14+1, 1)]
+        self.sector_checkboxes: list[QCheckBox] = [
             QCheckBox(str(sector)) for sector in self.sectors
         ]
         # add to layout
-        checkbox_layout.addWidget(QLabel("Sectors:"))
-        for checkbox in self.sector_checkboxes:
+        for index, checkbox in enumerate(self.sector_checkboxes):
             checkbox.setEnabled(False)
             checkbox.setChecked(True)
-            checkbox_layout.addWidget(checkbox)
+            if index <= 6: # up to sector 7
+                checkbox_row_1_layout.addWidget(checkbox)
+            else: # from sector 8 to 14
+                checkbox_row_2_layout.addWidget(checkbox)
+        # config and add "check all" and "check none" buttons
+        button_check_all = QPushButton("Check all")
+        button_check_none = QPushButton("Check none")
+        button_check_all.clicked.connect(lambda: self._check_all_sectors())
+        button_check_none.clicked.connect(lambda: self._uncheck_all_sectors())
+        checkbox_row_3_layout.addWidget(button_check_all)
+        checkbox_row_3_layout.addWidget(button_check_none)
         # fit results labels
         self.fitted_beam_energy_label = QLabel("")
         self.fit_results_label = QLabel("")
@@ -508,10 +523,18 @@ class MainWindow(QWidget):
         self.logger.setLevel(logging.DEBUG)
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(logger_formatter)
-        file_handler = logging.FileHandler(filename=self.logfile_path/filename)
-        file_handler.setFormatter(logger_formatter)
-        self.logger.addHandler(stream_handler)
-        self.logger.addHandler(file_handler)
+        try:
+            file_handler = logging.FileHandler(filename=self.logfile_path/filename)
+            file_handler.setFormatter(logger_formatter)
+            self.logger.addHandler(stream_handler)
+            self.logger.addHandler(file_handler)
+        except PermissionError as e:
+            raise PermissionError(
+                "You do not have write permissions into /asp/usr/data "
+                +"(or local ./data). "
+                +"Try running the GUI from a different dir or PC where you "
+                +"have elevated permissions."
+                ) from e
 
         # supress matplotlib font manager DEBUG logs
         logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
@@ -983,7 +1006,7 @@ class MainWindow(QWidget):
 
         return None
 
-    # ----------------------------------------------------------------------------------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     def do_fit(
         self,
     ) -> None:
@@ -992,21 +1015,18 @@ class MainWindow(QWidget):
         """
         self.on_status_update("Fitting...")
 
-        checked_sector_checkboxes: list[bool] = [
+        sector_is_checked: list[bool] = [
                 sector_checkbox.isChecked()
                 for sector_checkbox in self.sector_checkboxes
             ]
-        self.sectors_to_fit: list[int] = [
-            _sector
-            for _sector, checked in zip(
-                self.sectors, checked_sector_checkboxes
-            )
-            if checked
-        ]
+        self.sectors_to_fit: list[int] = []
+        for sector, is_checked in zip(self.sectors, sector_is_checked):
+            if is_checked:
+                self.sectors_to_fit.append(sector)
         self.processed_data.sectors_to_fit = self.sectors_to_fit
 
         # warn if no sectors selected and exit early
-        if not any(checked_sector_checkboxes):
+        if not any(sector_is_checked):
             warnings.warn("No sectors selected")
             QMessageBox.critical(
                 self,
@@ -1019,7 +1039,9 @@ class MainWindow(QWidget):
         try:
             self.plotter.calculate_fitting_mask()
             self.on_new_plot_info()
-            y_model, _, _, fit_results = self.fitter.fit_error_functions()
+            y_model, _, _, fit_results = self.fitter.fit_sigmoid(
+                    r2_threshold=0.6
+            )
 
             if len(y_model) == 0:  # if all fits fail
                 print("Fit results:\n", fit_results)
@@ -1188,6 +1210,28 @@ class MainWindow(QWidget):
 
         # make sure progress bar reads 0%
         self.progress_bar.setValue(0)
+
+        return None
+    
+    def _check_all_sectors(self, set_checked: bool = True) -> None:
+        """
+        Checks (or unchecks) all the sector check boxes
+
+        Parameters
+        ----------
+        set_checked: bool
+            Flag for setting checkboxes to checked on unchecked
+        """
+        for checkbox in self.sector_checkboxes:
+            checkbox.setChecked(set_checked)
+
+        return None
+
+    def _uncheck_all_sectors(self) -> None:
+        """
+        alias
+        """
+        self._check_all_sectors(set_checked=False)
 
         return None
 
