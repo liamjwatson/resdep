@@ -1297,7 +1297,7 @@ class QtWorkerDecorator(QObject):
 
 def spawn():
     app = QApplication(sys.argv)
-    MainWindow()
+    window = MainWindow()
     if hasattr(sys, "ps1"):  # interactive check
         app.exec()
     else:
