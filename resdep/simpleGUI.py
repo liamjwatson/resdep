@@ -258,6 +258,7 @@ class MainWindow(QWidget):
         # background logic
         self._load_state_PVs()
         self._running_experiment = False
+        self._automatic_scan_enabled: bool = False
         self.automatic_scan_timer = QTimer(self)
         self.automatic_scan_timer.setInterval(1000)
         self.automatic_scan_timer.timeout.connect(
