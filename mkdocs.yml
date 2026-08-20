@@ -130,6 +130,8 @@ markdown_extensions:
     permalink: true
 - pymdownx.arithmatex:
     generic: true
+- pymdownx.highlight:
+    anchor_linenums: true
 - pymdownx.superfences:
     custom_fences:
       - name: mermaid

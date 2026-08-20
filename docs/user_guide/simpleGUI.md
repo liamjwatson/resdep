@@ -10,7 +10,7 @@ The abort button on the control panel sends a fail-safe abort request to the thr
 ## Automatic scans
 When enabled, resdep experiments will run (by default unless specified) every hour after the previous has finished (approx. every 1.5 hours). When first switching to enable, an experiment will try to run immediately.
 
-Every time an automatic scan is triggered, it will first check *if* it can run. The current requirements are: (see [decision tree](../../code_base/workflow/check_able_to_run_workflow))
+Every time an automatic scan is triggered, it will first check *if* it can run. The current requirements are: (see [decision tree](../code_base/workflow/check_able_to_run_workflow.md))
 
 - Machine in 'user beam' mode
 - \> 150 mA beam current

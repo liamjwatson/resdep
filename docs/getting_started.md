@@ -20,8 +20,11 @@ Sweeps the kicker drive frequency over a specified range (the spin tune) and rec
         ```bash
         git clone https://github.com/liamjwatson/resdep.git
         ```
+    !!! Note
+        
+        OPI standard distributions should live in `/asp/usr/scripts/python/`
 
-2. Navigate to the repo root durectory
+2. Navigate to the repo root directory (`cd resdep`)
 3. Install with from wheel (**OPI**), or standard installation (**pip**):
 
     === "OPI"
@@ -41,7 +44,8 @@ Sweeps the kicker drive frequency over a specified range (the spin tune) and rec
 1. Clone the latest **tag**, which contains the latest source distribution (*.tar.gz* file) and corresponding wheel (*.whl* file) in `./dist`.
 2. Either:  
     1. **execute** `install_resdep.sh`, *or*
-    2. Inside the folder, **run** (filling in `$WHEEL_FILE_NAME` appropriately)
+    2. Inside the `./dist` directory, **run** 
+        (filling in `$WHEEL_FILE_NAME` appropriately)
 
 ```bash
 pip install $WHEEL_FILE_NAME.whl --find-links ./ --no-index --no-deps

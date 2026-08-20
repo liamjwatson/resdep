@@ -167,10 +167,10 @@ class ResonantDepolarisation:
         progress_callback:
             Passed progress update (`step`: [`int`][]) emitted by worker 
             function spawned by GUI.
-            Links to progress bar in either 
-            [`resdepGUI`][resdep.resdepGUI.MainWindow.on_progress_update] 
+            Links to progress bar in `_on_progress_update` of either 
+            [`resdepGUI`][resdep.resdepGUI] 
             or
-            [`simpleGUI`][resdep.simpleGUI.MainWindow.on_progress_update]
+            [`simpleGUI`][resdep.simpleGUI]
         plot_callback:
             Live plotting data (
             `freqs`, `beam_loss_window_1`, `beam_loss_window_2`
@@ -178,10 +178,11 @@ class ResonantDepolarisation:
             plotted to 
             [`resdepGUI`][resdep.resdepGUI.MainWindow.on_new_plot_info].
         status_callback:
-            Experiment status ([`str`][]) to displayed on either
-            [`resdepGUI`][resdep.resdepGUI.MainWindow.on_status_update] 
+            Experiment status ([`str`][]) to `on_status_update`, 
+            displayed on either
+            [`resdepGUI`][resdep.resdepGUI] 
             or
-            [`simpleGUI`][resdep.simpleGUI.MainWindow.on_status_update]
+            [`simpleGUI`][resdep.simpleGUI]
         data_path_callback:
             data path ([`pathlib.Path`][]) to passed to GUI for 
             saving GUI config / settings.
@@ -211,8 +212,7 @@ class ResonantDepolarisation:
         [`QtWorkerDecorator`][resdep.resdepGUI.QtWorkerDecorator] 
         and the [GUI][resdep.resdepGUI.MainWindow.__init__].
 
-        Calls [`_calculate_range`][resdep.experiment.ResonantDepolarisation._calculate_range] 
-        on default values.
+        Calls `_calculate_range` on default values.
         """                                               
         self._config_logger()
 
@@ -321,7 +321,6 @@ class ResonantDepolarisation:
             normalise out spurrious depolarisation events, 
             e.g. ID gap changes, magnet instabilities, etc.
         - Reads the beam loss for every monitor (readback at 10 Hz). 
-            See [`_log_data`][resdep.experiment.ResonantDepolarisation._log_data].
         - When finished
             - Turns off kicker drive and resets BLM decimation / ADC windows.
             - Saves and plots data on experiment end or [`KeyboardInterrupt`][]
@@ -2132,8 +2131,7 @@ class ProcessedData:
         self,
     ) -> None:
         """
-        Saves fitting results and data to 
-        [`data_path`][resdep.experiment.ResonantDepolarisation.data_path]
+        Saves fitting results and data to ResonantDepolarisation's data_path
         """
         path = self.resdep.data_path / "processed_data"
         Path.mkdir(path)

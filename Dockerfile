@@ -1,6 +1,20 @@
 # Use an official Python runtime as a parent image
 FROM python:3.9.23
+ARG HOME
 
+# Install EPICS
+RUN apt-get update && \
+    apt-get install -y \
+    build-essential \
+    libreadline-dev
+
+RUN mkdir $HOME/EPICS
+RUN wget -P $HOME/EPICS https://epics-controls.org/download/base/base-7.0.8.1.tar.gz
+RUN tar -xvf $HOME/EPICS/base-7.0.8.1.tar.gz
+RUN make $HOME/EPICS/base-7.0.8.1.tar.gz
+
+# set dir for app software
+RUN mkdir -p /usr/local/app
 WORKDIR /usr/local/app
 
 # Install the application dependencies
@@ -20,19 +34,22 @@ ENV QT_QPA_PLATFORM=offscreen
 
 # Copy in the source code
 COPY . .
+# delete data folder (if it exists in repo - permission issues)
+RUN rm -rf /usr/local/app/data
 EXPOSE 8080
 
-# Make data folder as root
-RUN mkdir -p /usr/local/app/data
+
 # Setup an app user so the container doesn't run as the root user
 RUN useradd newuser
 # give newuser write permissions in data folder
-RUN chown newuser /usr/local/app/data
+RUN chown newuser /usr/local/app
 # switch docker from root to newuser
 USER newuser
 
+# EPICS db test
+ENTRYPOINT [ "softIoc", "-d", "./test_IOC/test.db" ]
+CMD [ "dbl" ]
 
-
-ENTRYPOINT [ "python3", "-m" ]
-
-CMD ["pytest", "./tests/ResonantDepolarisation_test.py"]
+# # pytest
+# ENTRYPOINT [ "python3", "-m" ]
+# CMD ["pytest", "./tests/"]

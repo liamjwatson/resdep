@@ -631,8 +631,8 @@ class IocApi(devsup.util.StoppableThread):
             ratio_loss: dict[str, np.ndarray]
         ) -> None:
 
-        self.sweep_frequencies_record = freqs_array
-        self.sweep_energies_record = energy_array
+        self.sweep_frequencies_record.value = freqs_array
+        self.sweep_energies_record.value = energy_array
 
         for loss, record in zip(
                 ratio_loss.values(),

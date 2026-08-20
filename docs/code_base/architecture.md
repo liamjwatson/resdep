@@ -21,7 +21,7 @@ graph LR
     subgraph worker thread
         E["experiment"];
         subgraph extensible_classes
-            F["epicsBPMs"];
+            F["epicsBLMs"];
             G["epicsBPMs"];
         end
         subgraph helper_classes
@@ -40,7 +40,7 @@ graph LR
     click B "../GUIs/resdepGUI" "resdepGUI"
     click C "../helper_classes/_experiment_handlers" "experiment handlers"
     click E "../resdep" "resdep experiment"
-    click F "../extensible_classes/epicsBPMs" "epicsBPMs"
+    click F "../extensible_classes/epicsBLMs" "epicsBLMs"
     click G "../extensible_classes/epicsBPMs" "epicsBPMs"
     click H "../helper_classes/_fitting" "fitting"
     click I "../helper_classes/_plotting" "plotting"

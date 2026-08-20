@@ -598,7 +598,7 @@ class MX3_BPMs(BPMs):
     ----
     - Position units (EPICS): *micron*
     - Intensity units: *nano amp*
-    """
+    """             
 
     def __init__(
         self,

@@ -342,6 +342,7 @@ class Fitter:
                     fitted_beam_energy_frequencies[key] = mean_freq
                     fitted_beam_energies[key] = mean_energy
                     fitted_beam_energy_stddevs[key] = sigma_energy
+                    self.processed_data._poor_fit[key] = False
 
                     fit_results += (
                         f"sector={int(sector):02d}, " 
@@ -349,14 +350,6 @@ class Fitter:
                         + f"E0={mean_energy:0.5f} GeV, " 
                         + f"r^2={r2:0.2f}\n"
                     )
-                    self.processed_data._poor_fit[key] = False
-
-                fit_results += (
-                    f"sector={int(sector):02d}, " 
-                    + f"f0={mean_freq:0.3f} kHz, " 
-                    + f"E0={mean_energy:0.5f} GeV, " 
-                    + f"r^2={r2:0.2f}\n"
-                )
 
             except RuntimeError:
                 logging.error(traceback.format_exc())
