@@ -35,16 +35,7 @@
 # 
 # From template parameters
 # DEVICE - Normal resdep PV prefix: e.g. SR00RDP01
-# BLM  - beam loss monitor identifier, e.g. BLM04
-# CHANNEL - channel, i.e. A or B
 #
-# Template formal macro parameters:
-# NAME    - record/device name prefix, e.g. SR11BCM01
-# SIGNAL  - signal name e.g. CURRENT
-# EGU     - enginering units, e.g. mA
-# PREC    - precision, e.g. 3
-# LOW     - minimum allowed value, e.g. 50.0
-# HIGH    - maximum allowed value, e.g. 220.0
 #
 # Copyright (c) 2026 Australian Synchrotron
 #
@@ -100,12 +91,14 @@ record (mbbo, "$(DEVICE):SCAN_TYPE_CMD") {
 record (ao, "$(DEVICE):AUTOMATIC_SCAN_DELAY") {
     field (DESC, "Delay between automatic scans")
     field (SCAN, "Passive")
+    field (VAL,  "2")
     field (PREC, "1")
     field (EGU, "hours")
-    field (ADEL, "0.9")
-    field (MDEL, "0.9")
+    field (DRVL, "1.0")
+    field (DRVH, "72.0")
+    field (ADEL, "0.1")
+    field (MDEL, "0.1")
 }
-
 
 # -------------------------------------------------------------------- Feedback
 
@@ -117,7 +110,7 @@ record (ai, "$(DEVICE):BEAM_ENERGY") {
     field (EGU, "GeV")
 }
 
-record (ai, "$(DEVICE):BEAM_ENERGY_TWOSTD") {
+record (ai, "$(DEVICE):BEAM_ENERGY_ERROR_TWOSTD") {
     field (DESC, "ResDep beam energy error to two standard deviations")
     field (SCAN, "Passive")
     field (PREC, "6")
@@ -133,16 +126,16 @@ record (ai, "$(DEVICE):PROGRESS") {
     field (DESC, "Resonant depolarisation progress")
     field (SCAN, "Passive")
     field (PREC, "1")
-    field (EGU, "%")
-    field (ADEL, "0.9")
-    field (MDEL, "0.9")
+    field (EGU,  "%")
+    field (DRVL, "0.0")
+    field (DRVH, "100.0")
 }
 
 record (ai, "$(DEVICE):ESTIMATED_POLARISATION") {
     field (DESC, "Estimate of beam polarisation")
     field (SCAN, "Passive")
     field (PREC, "3")
-    field (EGU, "%")
+    field (EGU,  "%")
     field (ADEL, "0.9")
     field (MDEL, "0.9")
 }
@@ -150,13 +143,15 @@ record (ai, "$(DEVICE):ESTIMATED_POLARISATION") {
 record (ai, "$(DEVICE):AUTOMATIC_SCAN_COUNTDOWN") {
     field (DESC, "Countdown to next ResDep scan")
     field (SCAN, "Passive")
-    field (PREC, "3")
-    field (EGU, "seconds")
-    field (ADEL, "0.9")
-    field (MDEL, "0.9")
+    field (PREC, "0")
+    field (EGU,  "seconds")
+    field (LOPR, "0.0")
+    field (HOPR, "259200.0")     # 72 hours
+    field (ADEL, "0.5")
+    field (MDEL, "0.5")
 }
 
-# ---- Diagnostics
+# ----------------------------------------------------------------- Diagnostics
 record (mbbi, "$(DEVICE):STATE") {
     field (DESC, "Resonant depolarisation state")
     field (SCAN, "Passive")
@@ -165,6 +160,10 @@ record (mbbi, "$(DEVICE):STATE") {
     field (TWST, "INITIALISING")
     field (THST, "RUNNING")
     field (FRST, "FINISHED")
+}
+
+record (stringin, "(DEVICE):STATUS_MSG") {
+    field (DESC, "Detailied experiment status message")
 }
 
 record (mbbi, "$(DEVICE):RUN_INHIBIT_STATUS") {
@@ -192,20 +191,9 @@ record (stringin, "(DEVICE):ERROR_MSG") {
     field (DESC, "Detailied error test")
 }
 
-
-# ------ Processed data
-# e.g. SR00RDP01:BLM04_B_BEAM_LOSS_RATIO
-record (waveform, "$(DEVICE):$(BLM)_$(CHANNEL)_BEAM_LOSS_RATIO") {
-    field (DESC, "Normalised ratio of beam loss over split ADC windows")
-    field (SCAN, "Passive")
-    field (FTVL, "DOUBLE")
-    field (NELM, "19195")
-    field (EGU,  "")
-    field (PREC, "3")
-    field (LOPR, "0.0")
-    field (HOPR, "10.0")
-}
-
+# -------------------------------------------------------------- Processed data
+# these are the "x-axes" for the beam_loss ratio data waveforms (y-axis)
+# see Db/resonant_depolarisation_blm.template
 record (waveform, "$(DEVICE):SWEEP_FREQUENCIES") {
     field (DESC, "ResDep frequency sweep")
     field (SCAN, "Passive")
@@ -227,3 +215,5 @@ record (waveform, "$(DEVICE):SWEEP_ENERGIES") {
     field (LOPR, "0.0")
     field (HOPR, "10.0")
 }
+
+# end

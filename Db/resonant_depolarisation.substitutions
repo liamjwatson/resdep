@@ -35,36 +35,36 @@ file db/resonant_depolarisation.template {
             { "SR00RDP01" }
 }
 
-file db/resonant_depolarisation.template {
-   pattern  { BLM,     CHANNEL  }
-            { "BLM01",  "A"     }
-            { "BLM01",  "B"     }
-            { "BLM02",  "A"     }
-            { "BLM02",  "B"     }
-            { "BLM03",  "A"     }
-            { "BLM03",  "B"     }
-            { "BLM04",  "A"     }
-            { "BLM04",  "B"     }
-            { "BLM05",  "A"     }
-            { "BLM05",  "B"     }
-            { "BLM06",  "A"     }
-            { "BLM06",  "B"     }
-            { "BLM07",  "A"     }
-            { "BLM07",  "B"     }
-            { "BLM08",  "A"     }
-            { "BLM08",  "B"     }
-            { "BLM09",  "A"     }
-            { "BLM09",  "B"     }
-            { "BLM10",  "A"     }
-            { "BLM10",  "B"     }
-            { "BLM11",  "A"     }
-            { "BLM11",  "B"     }
-            { "BLM12",  "A"     }
-            { "BLM12",  "B"     }
-            { "BLM13",  "A"     }
-            { "BLM13",  "B"     }
-            { "BLM14",  "A"     }
-            { "BLM14",  "B"     }
+file db/resonant_depolarisation_blm.template {
+   pattern  { DEVICE,      BLM,     CHANNEL  }
+            { "SR00RDP01", "BLM01",  "A"     }
+            { "SR00RDP01", "BLM01",  "B"     }
+            { "SR00RDP01", "BLM02",  "A"     }
+            { "SR00RDP01", "BLM02",  "B"     }
+            { "SR00RDP01", "BLM03",  "A"     }
+            { "SR00RDP01", "BLM03",  "B"     }
+            { "SR00RDP01", "BLM04",  "A"     }
+            { "SR00RDP01", "BLM04",  "B"     }
+            { "SR00RDP01", "BLM05",  "A"     }
+            { "SR00RDP01", "BLM05",  "B"     }
+            { "SR00RDP01", "BLM06",  "A"     }
+            { "SR00RDP01", "BLM06",  "B"     }
+            { "SR00RDP01", "BLM07",  "A"     }
+            { "SR00RDP01", "BLM07",  "B"     }
+            { "SR00RDP01", "BLM08",  "A"     }
+            { "SR00RDP01", "BLM08",  "B"     }
+            { "SR00RDP01", "BLM09",  "A"     }
+            { "SR00RDP01", "BLM09",  "B"     }
+            { "SR00RDP01", "BLM10",  "A"     }
+            { "SR00RDP01", "BLM10",  "B"     }
+            { "SR00RDP01", "BLM11",  "A"     }
+            { "SR00RDP01", "BLM11",  "B"     }
+            { "SR00RDP01", "BLM12",  "A"     }
+            { "SR00RDP01", "BLM12",  "B"     }
+            { "SR00RDP01", "BLM13",  "A"     }
+            { "SR00RDP01", "BLM13",  "B"     }
+            { "SR00RDP01", "BLM14",  "A"     }
+            { "SR00RDP01", "BLM14",  "B"     }
 }
 
 # end

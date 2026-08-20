@@ -51,12 +51,17 @@ class RunInhibitState(IntEnum):
 class IocApiContract(Protocol):
     """
     Contract to check IocApi class against.
+    This contract explicitly ensures that the methods defined here MUST be 
+    included in the ioc api. More methods and properties can be defined in the 
+    api, but this contract ensures the bare minimum definition.
+
     Use protocol instead of ABC because of metaclass inherit conflicts.
-    """
+    """         
     def exec_run_experiment(): ...
     def exec_abort_experiment(): ...
     def emit_progress(self, step: int, max_steps: int): ...
     def emit_state(self, state: State): ...
+    def emit_status(self, status: str): ...
     def emit_results(
         self, 
         E0_mean_sigfig: Optional[float],
@@ -114,6 +119,7 @@ class IocApi(devsup.util.StoppableThread):
                 progress_callback=self.emit_progress,
                 results_callback=self.emit_results,
                 state_callback=self.emit_state,
+                status_callback=self.emit_status,
                 processed_data_callback=self.emit_processed_data,
         )
         self.experiment_thread = threading.Thread(
@@ -145,8 +151,8 @@ class IocApi(devsup.util.StoppableThread):
         self.beam_energy_record = RecordAccess(
                 f"{PREFIX}:BEAM_ENERGY"
         ) # float (GeV)
-        self.beam_energy_twostd_record = RecordAccess(
-                f"{PREFIX}:BEAM_ENERGY_TWOSTD"
+        self.beam_energy_error_twostd_record = RecordAccess(
+                f"{PREFIX}:BEAM_ENERGY_ERROR_TWOSTD"
         ) # float (GeV)
         self.beam_energy_formatted_record = RecordAccess(
                 f"{PREFIX}:BEAM_ENERGY_FORMATTED"
@@ -165,6 +171,9 @@ class IocApi(devsup.util.StoppableThread):
         self.state_record = RecordAccess(
                 f"{PREFIX}:STATE"
         ) # Enum
+        self.status_msg_record = RecordAccess(
+                f"{PREFIX}:STATUS_MSG"
+        ) # str
         self.error_msg_record = RecordAccess(
                 f"{PREFIX}:ERROR_MSG"
         ) # str
@@ -417,28 +426,6 @@ class IocApi(devsup.util.StoppableThread):
             verdict = False
             return verdict, error
 
-        # <---------- Currently not checking wiggler ramp in the archiver 
-        # try:
-        #     recent_wiggler_ramp: bool = check_recent_wiggler_ramp()
-        #     if recent_wiggler_ramp:
-        #         error = (
-        #                 "Wiggler ramp initiated in the 40 minutes. "
-        #                 +"Require more time to repolarise / stabilise."
-        #         )
-        #         verdict = False
-        #         return verdict, error
-        # except Exception:
-        #     self.logger.error(traceback.format_exc())
-        #     error = (
-        #             "Unable to check if there was a recent wiggler ramp. "
-        #             +"This is probably due to an issue with the archiver. "
-        #             +"Check the GUI log (/asp/usr/data/resdep/GUI_log) "
-        #             +"for more info."
-        #     )
-        #     verdict = False
-        #     return verdict, error
-
-
         # ignore statement here because cant type hint array size / shape
         beam_current: np.float64 = current_history_24h[:-1] #ty: ignore[invalid-assignment]
         if beam_current < 150: # mA
@@ -603,6 +590,12 @@ class IocApi(devsup.util.StoppableThread):
                 f"Experiment state ({state.name}) pushed to EPICS." 
         )
         return None
+    
+    def emit_status(self, status: str) -> None:
+        self.status_msg_record.value = status
+        self.logger.debug(f"Experiment status ({status}) pushed to epics")
+
+        return None
 
     def emit_results(
         self, 
@@ -617,7 +610,7 @@ class IocApi(devsup.util.StoppableThread):
             return None
 
         self.beam_energy_record.value = E0_mean_sigfig
-        self.beam_energy_twostd_record.value = E0_stddev_sigfig
+        self.beam_energy_error_twostd_record.value = E0_stddev_sigfig
         self.beam_energy_formatted_record.value = formatted_beam_energy
 
         self.logger.debug("Diagnostic results pushed to EPICS.")

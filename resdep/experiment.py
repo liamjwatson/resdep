@@ -55,7 +55,7 @@ from resdep._calculations import energy_calc
 from resdep._progressBars import printProgressBar
 from resdep._archiver import bioSAXSRampStatus, IMBLRampStatus, ADSRampStatus
 
-class ScanType(Enum):
+class ScanType(IntEnum):
     NONE = 0
     AUTOMATIC = 1
     NORMAL = 2
