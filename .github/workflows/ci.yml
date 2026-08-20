@@ -2,9 +2,7 @@ name: ci
 on:
   push:
     branches:
-      - master 
-      - main
-      - develop # ! <------------ REMOVE THIS FOR PRODUCTION
+      - kubili-refactor # latest version, should be referenced by controls
 permissions:
   contents: write
 env:
