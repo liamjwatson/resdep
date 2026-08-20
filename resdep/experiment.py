@@ -1341,9 +1341,15 @@ class ResonantDepolarisation:
         )
         time.sleep(0.5)
         # integrated buffer is updside down, need to normalise
-        integrated_buffer_loss = (
-                integrated_buffer_loss / integrated_buffer_loss.max()        
-        )
+        try:
+            integrated_buffer_loss = (
+                    integrated_buffer_loss / integrated_buffer_loss.max()        
+            )
+        except ZeroDivisionError as e:
+            raise ArithmeticError(
+                    "Integrated buffer loss is zero. Is there beam current?"
+            ) from e
+
         # and flip
         integrated_buffer_loss = integrated_buffer_loss * -1 + 1
         # and shift by trigger 2 (T2) delay
@@ -1366,10 +1372,17 @@ class ResonantDepolarisation:
         # separate the fill pattern into two charge equivalent halves
         integrated_fill_pattern: np.floating = np.sum(integrated_buffer_loss)
         cumsum_fill_pattern: npt.NDArray = np.cumsum(integrated_buffer_loss)
-        dividing_line: int = int(np.flatnonzero(
-            cumsum_fill_pattern < integrated_fill_pattern/2
-            ).max() + 1
-        )
+        try:
+            dividing_line: int = int(np.flatnonzero(
+                cumsum_fill_pattern < integrated_fill_pattern/2
+                ).max() + 1
+            )
+        except ValueError as e:
+            raise ArithmeticError(
+                    "Unable to separate the bunch train into two charge "
+                    +"equivalent halves. This is probably due to bad looking "
+                    +"integrated loss channel on the BLMs."
+            ) from e
         # format: [offset_1, window_1, offset_2, window_2]
         adc_counter_windows: list[int] = [
             0,
